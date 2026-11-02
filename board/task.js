@@ -356,7 +356,7 @@ export class TaskView extends View {
     const prog = knownNow().find((p) => p.key === m?.program);
     const hist = [...(t.history ?? [])].reverse();
     const blockedNow = status === "blocked" || (active && t.attention);
-    const canStart = Boolean(m) && !active;
+    const canStart = Boolean(m) && !active && !depsOpen(t).length;
     const needsYou = Boolean(t.attention) || status === "blocked";
     const actions = h_flex().flex_wrap().gap(6).items_center()
       .when(needsYou, (el) => el.child(button("unblock", "Unblock in tab ↗", (_e, cx) => this.run(cx, async () => { await unblockInTab(task(t.id)); this.close(); }), { primary: true, disabled: this.busy })))
