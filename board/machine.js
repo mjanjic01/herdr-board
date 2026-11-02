@@ -78,6 +78,7 @@ export class MachineView extends View {
       load: mk("load", s.gateLoad ?? 1.5, "1.5"),
       swap: mk("swap", s.gateSwap ? Math.round(s.gateSwap * 100) : 0, "0"),
       runs: mk("runs", s.maxRuns ?? 20, "20"),
+      cleanup: mk("cleanup", s.cleanupDone ?? 30, "30"),
     };
     this.pressure = String(s.gatePressure ?? 2);
   }
@@ -104,6 +105,7 @@ export class MachineView extends View {
       gatePressure: Number(this.pressure),
       gateSwap: Math.round(num(this.st.swap, 0, 100, 0)) / 100,
       maxRuns: Math.round(num(this.st.runs, 2, 99, 20)),
+      cleanupDone: Math.round(num(this.st.cleanup, 0, 1440, 30)),
     };
     this.busy = true; this.error = "";
     cx.notify();
@@ -201,7 +203,10 @@ export class MachineView extends View {
           .child(label("Memory pressure gate"))
           .child(chips("mp", PRESSURE, this.pressure, (id, cx) => { this.pressure = id; cx.notify(); }))
           .child(div().pt(3).text_size(10.5).text_color(tm.dim).child("No new starts at this memory pressure or worse.")))
-        .child(f("swap", "Swap gate (%)", "No new starts above this share of swap used; 0 = off. macOS keeps swap, so keep it off or high.")));
+        .child(f("swap", "Swap gate (%)", "No new starts above this share of swap used; 0 = off. macOS keeps swap, so keep it off or high.")))
+      .child(h_flex().gap(16).items_start()
+        .child(f("cleanup", "Clean up after Done (min)", "Idle agent sessions of a task close once it has sat in Done this long; 0 = never."))
+        .child(div().flex_1()).child(div().flex_1()));
   }
 
   render(cx) {

@@ -96,6 +96,7 @@ The default operation. Fields:
 | `description` | no | Markdown: what to do, where, and how to know it is done. |
 | `assignee` | no | A member name from that board's team. |
 | `column` | no | `backlog`, `todo` (default) or `doing`. Only `doing` starts anyone. It needs an assignee, Autopilot on, and an open Herdr space that shows the board. Otherwise the task goes to `todo` and the answer says why. |
+| `dependsOn` | no | Tasks this one waits for: a list of task ids, or exact titles on the same board. It starts (by hand, by a hand-off or by Pick up) only when every one is in `review` or `done`. Ids from another board, and loops, are refused. |
 
 ```json
 {"title": "Write the README", "description": "Install, usage, one example.", "folder": "/Users/me/code/cli", "assignee": "Ana", "from": "a Claude session"}
@@ -111,7 +112,11 @@ A new folder gets a new board, with the first team in the library.
 {"op": "note", "id": "k1a2b3c4d5e6", "text": "The API key is in 1Password."}
 ```
 
-A move to `doing` starts the assignee under the same rules as a create.
+A move to `doing` starts the assignee under the same rules as a create. A task
+whose dependencies are not in `review` or `done` yet waits instead: the answer
+says what it waits for, and it starts by itself once they are. Change its
+dependencies with `{"op": "update", "id": "…", "patch": {"dependsOn": ["k…"]}}`.
+In `board.json`, each task lists `depends_on` and `waits_for`.
 
 ## Answers
 

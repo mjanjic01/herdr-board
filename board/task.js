@@ -2,8 +2,8 @@
 // history, runs and the actions the person takes on it.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState } from "gpui-base";
-import { theme, spaces, props, closeOverlay, run, exec } from "herdr";
-import { unblockInTab, COLUMNS, tasks, task, team, member, column, activeRun, liveStatus, runStatus, runLimit, updateTask, newTask, removeTask, removeTaskDir, where, launch, restart, endRun, tidy, goTo, paneOf, isLive, leftOver, nudge, reply, place, taskDir, knownNow, programs, ago, uid, attachments, copyIn, attach, detach, filesDir, pickFiles, openFile, removeWorktree, ctxOfTask, boardOfSpace, fileOf, homeNow } from "./state.js";
+import { theme, spaces, props, closeOverlay, openOverlay, run, exec } from "herdr";
+import { boardMates, depsOpen, DEP_DONE, depLoops, MOD, unblockInTab, COLUMNS, tasks, task, team, member, column, activeRun, liveStatus, runStatus, runLimit, updateTask, newTask, removeTask, removeTaskDir, where, launch, restart, endRun, tidy, goTo, paneOf, isLive, leftOver, nudge, reply, place, taskDir, knownNow, programs, ago, uid, attachments, copyIn, attach, detach, filesDir, pickFiles, openFile, removeWorktree, ctxOfTask, boardOfSpace, fileOf, homeNow } from "./state.js";
 import { button, tiny, label, field, fileChip, memberChip, programIcon, statusGlyph, STATUS_WORDS, section, chips, titleRow, closeButton, colorOf, dot } from "./ui.js";
 import { MarkdownEditor } from "./mdeditor.js";
 import { TextBlocks } from "./textblock.js";
@@ -66,6 +66,11 @@ export class TaskView extends View {
       space: t?.space ?? p.space ?? null, assignee: null, column: t?.column ?? "todo",
     };
     this.draft.assignee = t?.assignee ?? (team(this.ctx())[0]?.id ?? null);
+    this.draft.dependsOn = [...(t?.dependsOn ?? [])];
+    this.depFilter = InputState.new({ placeholder: "Filter this board's tasks" });
+    this.depFilter.on("change", (_e, cx) => cx.notify());
+    this.depFilter.on("focus", (_e, cx) => { this.focusedField = "depFilter"; cx.notify(); });
+    this.depFilter.on("blur", (_e, cx) => { if (this.focusedField === "depFilter") this.focusedField = null; cx.notify(); });
     // A new task has no id until Save; its files go under the id it will get.
     if (!this.id) { this.pendingId = uid("k"); this.draft.attachments = []; }
     this.hint = "";
@@ -176,7 +181,8 @@ export class TaskView extends View {
     const d = this.draft;
     if (this.busy) return; // a copy still runs: its files must be in the task
     if (!d.title.trim()) { this.error = "Give the task a title."; cx.notify(); return; }
-    const fields = { title: d.title.trim(), description: d.description, assignee: d.assignee, column: d.column };
+    const fields = { title: d.title.trim(), description: d.description, assignee: d.assignee, column: d.column,
+      dependsOn: (d.dependsOn ?? []).filter((id) => task(id)) }; // gone ones drop out
     let done;
     if (this.id) done = updateTask(this.id, fields);
     else {
@@ -243,12 +249,57 @@ export class TaskView extends View {
       .child(label("First on it"))
       .child(chips("as", [...members, { id: "", label: "nobody yet" }], d.assignee ?? "", (id, cx) => { d.assignee = id || null; cx.notify(); }))
       .child(label("Column"))
-      .child(chips("co", COLUMNS.filter((c) => c.id !== "doing").map((c) => ({ id: c.id, label: c.name })), d.column, (id, cx) => { d.column = id; cx.notify(); })))
+      .child(chips("co", COLUMNS.filter((c) => c.id !== "doing").map((c) => ({ id: c.id, label: c.name })), d.column, (id, cx) => { d.column = id; cx.notify(); }))
+      .child(label("Depends on (it starts only when these are in Review or Done)"))
+      .child(this.depPicker({ id: this.id ?? this.pendingId, machine: this.machine(), board: t?.board ?? board?.id })))
       .when(Boolean(this.error), (el) => el.child(div().pt(8).text_size(12).text_color(tm.blocked).child(this.error)))
       .child(h_flex().pt(14).gap(8).justify_end()
         .child(button("cancel", "Cancel", (_e, cx) => { if (this.id) { this.editing = false; cx.notify(); } else this.close(); }, { disabled: this.busy }))
         .child(button("save", "Save", (_e, cx) => this.save(false, cx), { disabled: this.busy }))
         .when(Boolean(d.assignee), (el) => el.child(button("save-start", `Save & start ${member(d.assignee)?.name ?? ""}`, (_e, cx) => this.save(true, cx), { primary: true, disabled: this.busy }))));
+  }
+
+  // The tasks this one waits for: picked from the board's other tasks. One that
+  // would make a loop (it waits for this task, maybe through others) is not offered.
+  depPicker(self) {
+    const tm = theme();
+    const d = this.draft;
+    const mates = boardMates(self);
+    const chosen = (d.dependsOn ?? []).map((id) => mates.find((x) => x.id === id)).filter(Boolean);
+    const q = (this.depFilter?.value() ?? "").trim().toLowerCase();
+    const offer = mates.filter((x) => !d.dependsOn.includes(x.id) && !depLoops(self.id, x.id) && (!q || x.title.toLowerCase().includes(q))).slice(0, 8);
+    const colTag = (x) => div().flex_none().text_size(10.5).text_color(DEP_DONE.has(x.column) ? tm.working : tm.dim).child(column(x.column).name);
+    return v_flex().gap(6)
+      .child(h_flex().flex_wrap().gap(6)
+        .children(chosen.map((x) => h_flex().id(`dep-${x.id}`).gap(6).items_center().px(8).py(3).rounded(6).bg(tm.raised).border_1().border_color(tm.border)
+          .child(div().text_size(12).text_color(tm.foreground).child(x.title))
+          .child(colTag(x))
+          .child(div().id(`dep-x-${x.id}`).px(2).text_size(12).text_color(tm.dim).cursor_pointer().hover((st) => st.text_color(tm.foreground))
+            .on_click((_e, cx) => { d.dependsOn = d.dependsOn.filter((i) => i !== x.id); cx.notify(); }).child("✕"))))
+        .when(!chosen.length, (el) => el.child(div().text_size(12).text_color(tm.dim).child("None: it can start any time."))))
+      .when(mates.length > 0, (el) => el
+        .child(div().w(280).child(field(this.depFilter, this.focusedField === "depFilter", { h: 28 })))
+        .child(v_flex().gap(1).children(offer.map((x) => h_flex().id(`dep-add-${x.id}`).items_center().gap(8).px(6).py(4).rounded(6).cursor_pointer()
+          .hover((st) => st.bg(tm.hover))
+          .on_click((_e, cx) => { d.dependsOn = [...d.dependsOn, x.id]; cx.notify(); })
+          .child(div().text_size(12).text_color(tm.accent).child("+"))
+          .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(tm.foreground).child(x.title))
+          .child(colTag(x))))))
+      .when(!mates.length, (el) => el.child(div().text_size(11).text_color(tm.dim).child("No other tasks on this board yet.")));
+  }
+
+  depList(t) {
+    const tm = theme();
+    return v_flex().gap(2).children((t.dependsOn ?? []).map((id, i) => {
+      const x = task(id);
+      const ok = !x || DEP_DONE.has(x.column);
+      return h_flex().id(`depl-${i}`).items_center().gap(8).px(6).py(4).rounded(6)
+        .when(Boolean(x), (el) => el.cursor_pointer().hover((st) => st.bg(tm.hover))
+          .on_click(() => openOverlay({ mod: MOD, kind: "dialog", width: 700, height: 740, props: { view: "task", id } })))
+        .child(dot(ok ? tm.working : tm.blocked, 7))
+        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(tm.foreground).child(x?.title ?? "(deleted: counts as done)"))
+        .child(div().flex_none().text_size(11).text_color(ok ? tm.working : tm.dim).child(x ? column(x.column).name : ""));
+    }));
   }
 
   // ---- the details ----
@@ -315,7 +366,7 @@ export class TaskView extends View {
         .child(button("nudge", "Nudge", (_e, cx) => this.run(cx, () => nudge(task(t.id))), { disabled: this.busy })))
       .child(button("assign", `Assign ${this.pick === "assign" ? "▴" : "▾"}`, (_e, cx) => { this.pick = this.pick === "assign" ? null : "assign"; cx.notify(); }))
       .child(button("move", `${col.name} ${this.pick === "move" ? "▴" : "▾"}`, (_e, cx) => { this.pick = this.pick === "move" ? null : "move"; cx.notify(); }))
-      .child(button("edit", "Edit", (_e, cx) => { this.editing = true; this.title.set_value(t.title); this.desc.setValue(t.description ?? ""); this.hint = ""; this.draft = { ...this.draft, title: t.title, description: t.description ?? "", space: t.space, assignee: t.assignee, column: t.column }; cx.notify(); this.title.focus(); }))
+      .child(button("edit", "Edit", (_e, cx) => { this.editing = true; this.title.set_value(t.title); this.desc.setValue(t.description ?? ""); this.hint = ""; this.draft = { ...this.draft, title: t.title, description: t.description ?? "", space: t.space, assignee: t.assignee, column: t.column, dependsOn: [...(t.dependsOn ?? [])] }; cx.notify(); this.title.focus(); }))
       .when((t.runs ?? []).some(leftOver), (el) => el.child(button("tidy", "Close finished runs", (_e, cx) => this.run(cx, () => tidy(task(t.id))))))
       .child(div().flex_1())
       .child(button("delete", this.confirmDelete ? "Really delete" : "Delete", (_e, cx) => {
@@ -355,6 +406,7 @@ export class TaskView extends View {
         .child(section("Description", this.text.descTools(t)))
         .child(this.text.descBox(t))
         .when(prLinks(t).length > 0, (el) => el.child(section("Pull requests")).child(this.prList(t)))
+        .when((t.dependsOn ?? []).length > 0, (el) => el.child(section("Depends on", depsOpen(t).length ? div().text_size(11).text_color(tm.dim).child("waits until all are in Review or Done") : null)).child(this.depList(t)))
         .when(attachments(t).length > 0, (el) => el
           .child(section("Attachments"))
           .child(h_flex().flex_wrap().gap(6).items_start().children(attachments(t).map((a, i) =>

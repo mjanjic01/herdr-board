@@ -124,19 +124,19 @@ test("a doing task with an assignee, no run, no note and not waiting is stranded
   assert.equal(stranded({ column: "doing", assignee: "cy", autopilot: false }, null), false);
 });
 
-test("idle sessions of finished runs close after 15 minutes, only when safe", () => {
+test("idle sessions close only after the task sat in Done for a while", () => {
   const now = 10_000_000;
-  const r = { id: "r1", result: { action: "handoff" }, idleAt: now - 16 * 60000 };
+  const r = { id: "r1", result: { action: "done" }, idleAt: now - 16 * 60000 };
   const k = { state: "live", status: "idle", labels: {} };
-  const t = { column: "doing", runs: [r, { id: "r2" }] };
-  assert.equal(closable(t, r, k, now), true);
-  assert.equal(closable(t, { ...r, idleAt: now - 5 * 60000 }, k, now), false);
-  assert.equal(closable(t, r, { ...k, status: "working" }, now), false);
-  assert.equal(closable(t, r, { ...k, status: "blocked" }, now), false);
-  assert.equal(closable(t, r, { ...k, labels: { "herdr.tab": "tb1" } }, now), false);
-  assert.equal(closable({ column: "doing", runs: [r] }, r, k, now), false);
-  assert.equal(closable({ column: "review", runs: [r] }, r, k, now), true);
-  assert.equal(closable(t, { ...r, result: null }, k, now), false);
+  const done = { column: "done", doneAt: now - 31 * 60000, runs: [r] };
+  assert.equal(closable(done, r, k, now), true);
+  assert.equal(closable({ ...done, doneAt: now - 10 * 60000 }, r, k, now), false);
+  assert.equal(closable({ ...done, column: "review" }, r, k, now), false);
+  assert.equal(closable({ column: "doing", runs: [r, { id: "r2" }] }, r, k, now), false);
+  assert.equal(closable(done, r, k, now, 0), false);
+  assert.equal(closable(done, { ...r, idleAt: now - 5 * 60000 }, k, now), false);
+  assert.equal(closable(done, r, { ...k, status: "working" }, now), false);
+  assert.equal(closable(done, r, { ...k, labels: { "herdr.tab": "tb1" } }, now), false);
 });
 
 test("a running Claude Bash command below the agent counts as busy", () => {
@@ -250,4 +250,46 @@ test("the machine samples keep the last hour", () => {
   assert.equal(b.t.length, 360);
   assert.equal(b.t[0], 40);
   assert.equal(b.load.at(-1), 399);
+});
+
+import { blockStep } from "./engine.mjs";
+
+test("a question answered in the terminal: stopped after asking, then working again", () => {
+  const r = { blocked: "Pick A or B?" };
+  assert.equal(blockStep(r, "working"), null);              // still writing the result: not yet
+  assert.deepEqual(blockStep(r, "idle"), { blockPaused: true });
+  const paused = { ...r, blockPaused: true };
+  assert.equal(blockStep(paused, "idle"), null);
+  assert.deepEqual(blockStep(paused, "working"), { blockAnswered: true });
+  assert.equal(blockStep({ ...paused, blockAnswered: true }, "working"), null);
+  assert.equal(blockStep({}, "working"), null);              // no question asked
+});
+
+import { blockedBy, depsText, wouldCycle } from "./engine.mjs";
+
+test("blockedBy: dependencies count as done in Review or Done; gone ones count as done", () => {
+  const all = [
+    { id: "a", title: "API", column: "doing" },
+    { id: "b", title: "Schema", column: "review" },
+    { id: "c", title: "Docs", column: "done" },
+    { id: "d", title: "UI", column: "todo" },
+  ];
+  assert.deepEqual(blockedBy({ dependsOn: ["a", "b", "c", "gone"] }, all).map((x) => x.id), ["a"]);
+  assert.deepEqual(blockedBy({ dependsOn: ["b", "c"] }, all), []);
+  assert.deepEqual(blockedBy({}, all), []);
+  assert.deepEqual(blockedBy({ dependsOn: ["a", "d"] }, all).map((x) => x.id), ["a", "d"]);
+});
+
+test("depsText says what a task waits for", () => {
+  assert.equal(depsText([]), null);
+  assert.equal(depsText([{ title: "API", column: "doing" }]), 'Waits for "API" (In progress)');
+  assert.equal(depsText([{ title: "API", column: "doing" }, { title: "UI", column: "todo" }]), 'Waits for 2 tasks: "API" (In progress), "UI" (To do)');
+});
+
+test("wouldCycle finds loops through dependencies, also indirect ones", () => {
+  const all = [{ id: "a", dependsOn: ["b"] }, { id: "b", dependsOn: ["c"] }, { id: "c", dependsOn: [] }, { id: "x", dependsOn: ["x2"] }];
+  assert.equal(wouldCycle("c", ["a"], all), true);   // c -> a -> b -> c
+  assert.equal(wouldCycle("a", ["c"], all), false);
+  assert.equal(wouldCycle("c", ["x"], all), false);  // a dependency that is gone ends the walk
+  assert.equal(wouldCycle("a", ["a"], all), true);
 });

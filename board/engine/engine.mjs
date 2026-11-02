@@ -477,7 +477,7 @@ export const COLUMNS = [
 // suites at once on this machine (board-heavy). gate*: the load gate's limits.
 // gateSwap is off (0) by default: macOS grows swap on demand and keeps it, so a
 // high used share is normal; memory pressure is the kernel's own verdict.
-const DEFAULT_SETTINGS = { autopilot: true, maxRuns: 20, openTabs: false, programs: {}, niceness: 10, heavySlots: 1, gatePressure: 2, gateSwap: 0, gateLoad: 1.5 };
+const DEFAULT_SETTINGS = { autopilot: true, maxRuns: 20, openTabs: false, programs: {}, niceness: 10, heavySlots: 1, gatePressure: 2, gateSwap: 0, gateLoad: 1.5, cleanupDone: 30 };
 
 // The run limit counts finished runs only: a run that ended with a hand-off or
 // a result. A stopped, failed or restarted run is not a loop.
@@ -584,7 +584,14 @@ function member(ref, t) {
   return membersOf(t).find((m) => m.id === key || m.name.toLowerCase() === key || `${m.name} (${m.role})`.toLowerCase() === key) ?? null;
 }
 function updateTask(id, patch) {
-  tasks = tasks.map((t) => (t.id === id ? (typeof patch === "function" ? patch(t) : { ...t, ...patch, updated: Date.now() }) : t));
+  tasks = tasks.map((t) => {
+    if (t.id !== id) return t;
+    const next = typeof patch === "function" ? patch(t) : { ...t, ...patch, updated: Date.now() };
+    // When the task entered Done: the session cleanup counts from there.
+    if (next.column === "done" && t.column !== "done") return { ...next, doneAt: Date.now() };
+    if (next.column !== "done" && next.doneAt) return { ...next, doneAt: null };
+    return next;
+  });
   dirty = true;
 }
 const hist = (t, text, memberId = null) => [...(t.history ?? []), { at: Date.now(), member: memberId, text }];
@@ -722,7 +729,68 @@ async function argvFor(m, dir) {
 }
 
 // queued: a start by the engine itself (a pickup or a waiting hand-off).
+// ---- dependencies ----
+//
+// A task's dependsOn: ids of tasks on the same board. It may start (by hand,
+// by a hand-off or by pick-up) only when every one is in Review or Done. A task
+// that is gone counts as done.
+const DEP_DONE = new Set(["review", "done"]);
+export const blockedBy = (t, all) => (t?.dependsOn ?? [])
+  .map((id) => all.find((x) => x.id === id))
+  .filter((d) => d && !DEP_DONE.has(d.column));
+const colName = (c) => COLUMNS.find((x) => x.id === c)?.name ?? c;
+export function depsText(blockers) {
+  if (!blockers.length) return null;
+  if (blockers.length === 1) return `Waits for "${blockers[0].title}" (${colName(blockers[0].column)})`;
+  return `Waits for ${blockers.length} tasks: ${blockers.map((d) => `"${d.title}" (${colName(d.column)})`).join(", ")}`;
+}
+// Would `deps` on task `id` close a loop (some dependency, through its own
+// dependencies, depends on `id`)?
+export function wouldCycle(id, deps, all) {
+  const seen = new Set();
+  const stack = [...deps];
+  while (stack.length) {
+    const d = stack.pop();
+    if (d === id) return true;
+    if (seen.has(d)) continue;
+    seen.add(d);
+    stack.push(...(all.find((x) => x.id === d)?.dependsOn ?? []));
+  }
+  return false;
+}
+// Ids (or exact titles, for agents' requests) to ids on the task's board.
+function depIds(t, list) {
+  if (list == null) return [];
+  if (!Array.isArray(list)) throw new Error("dependsOn is a list of task ids or titles.");
+  const out = [];
+  for (const ref of list) {
+    const key = String(ref ?? "").trim();
+    if (!key) continue;
+    const d = tasks.find((x) => x.id === key) ?? tasks.filter((x) => x.board === t.board && x.title === key)[0];
+    if (!d) continue; // gone: counts as done, so it is dropped
+    if (d.board !== t.board) throw new Error(`"${d.title}" is on another board: a task can depend only on tasks of its own board.`);
+    if (d.id === t.id) throw new Error("A task cannot depend on itself.");
+    if (!out.includes(d.id)) out.push(d.id);
+  }
+  if (t.id && wouldCycle(t.id, out, tasks)) throw new Error("That would make a loop: one of those tasks already waits for this one.");
+  return out;
+}
+// A task whose dependencies were open and are now all done: say so once.
+function depsWatch() {
+  for (const t of tasks) {
+    if (!t.dependsOn?.length) { if (t.depsWaiting) updateTask(t.id, (cur) => ({ ...cur, depsWaiting: false })); continue; }
+    const open = blockedBy(t, tasks).length > 0;
+    if (open && !t.depsWaiting) updateTask(t.id, (cur) => ({ ...cur, depsWaiting: true }));
+    if (!open && t.depsWaiting) {
+      updateTask(t.id, (cur) => ({ ...cur, depsWaiting: false, history: hist(cur, "Its dependencies are in Review or Done: it can start") }));
+      event("info", `${t.title}: dependencies done`, "It can start now.");
+    }
+  }
+}
+
 async function launch(t, memberId, { queued = false } = {}) {
+  const deps = depsText(blockedBy(t, tasks));
+  if (deps) throw Object.assign(new Error(deps), { wait: true, deps: true });
   if (queued && startGate()) throw Object.assign(new Error(startGate()), { wait: true, limit: true });
   const b = boardOf(t);
   if (!b) throw new Error("The task has no board.");
@@ -830,7 +898,7 @@ function applyResult(taskId, runId, res) {
   let patch;
   if (action === "blocked") {
     if (r.blocked === summary) return null;
-    const runs = t.runs.map((x) => (x.id === runId ? { ...x, blocked: summary } : x));
+    const runs = t.runs.map((x) => (x.id === runId ? { ...x, blocked: summary, blockPaused: false, blockAnswered: false } : x));
     patch = { runs, attention: `${who.name} needs you: ${summary}`, history: hist(t, `${who.name} is blocked: ${summary}`, who.id) };
   } else {
     const runs = t.runs.map((x) => (x.id === runId ? { ...x, result: { action, to: to?.id ?? res.to ?? null, summary }, ended: Date.now(), exit: "result" } : x));
@@ -862,6 +930,8 @@ async function results() {
         const [a, b] = loop.map((id) => member(id, after)?.name ?? id);
         updateTask(after.id, { attention: `${a} and ${b} handed this back and forth ${LOOP} times in a row. Read the notes, then press Start to let ${done.to.name} go on, or change the task.` });
         event("warning", `${after.title}: a loop?`, `${a} and ${b} handed it back and forth ${LOOP} times.`);
+      } else if (settings.autopilot && after.autopilot !== false && blockedBy(after, tasks).length) {
+        updateTask(after.id, (cur) => ({ ...cur, queued: true, history: hist(cur, `${depsText(blockedBy(cur, tasks))} before ${done.to.name} starts`, done.to.id) }));
       } else if (settings.autopilot && after.autopilot !== false && startGate()) {
         updateTask(after.id, (cur) => ({ ...cur, queued: true, wait: startGate(), history: hist(cur, `${startGate()} before ${done.to.name} starts`, done.to.id) }));
       } else if (settings.autopilot && after.autopilot !== false) {
@@ -1134,6 +1204,16 @@ async function limits() {
 const WAITS = (who) => `${who} is waiting for you in its terminal (a question or a permission). Peek to answer.`;
 const STOPPED_HEAD = (who) => `${who} hit the usage limit and stopped.`;
 const STOPPED = (who, until) => `${STOPPED_HEAD(who)} Peek, then run /rate-limit-options so it continues by itself${until ? ` at ${until}` : ""}.`;
+// A question the agent asked with a "blocked" result, answered in its terminal
+// (Peek) instead of through the board: once the agent has stopped after asking
+// and then works again, the question is answered. Returns the run's new flags.
+export function blockStep(r, st) {
+  if (!r?.blocked || r.blockAnswered) return null;
+  if (st === "idle" || st === "done" || st === "blocked") return r.blockPaused ? null : { blockPaused: true };
+  if (st === "working" && r.blockPaused) return { blockAnswered: true };
+  return null;
+}
+
 function alert() {
   for (const t of tasks) {
     const r = activeRun(t);
@@ -1150,6 +1230,12 @@ function alert() {
       else if (st === "blocked" && !r.limit) note = WAITS(who);
       else if (st && st !== "blocked") note = null;
       if (note !== (t.attention ?? null)) next = { ...next, attention: note };
+    }
+    const step = blockStep(r, st);
+    if (step) {
+      next = { ...next, runs: next.runs.map((x) => (x.id === r.id ? { ...x, ...step } : x)) };
+      if (step.blockAnswered && next.attention === `${who} needs you: ${r.blocked}`)
+        next = { ...next, attention: null, updated: Date.now(), history: hist(next, `${who} continued after your answer in its terminal`, r.member) };
     }
     const akey = stopped ? "stopped" : st;
     if (r.background && !inPane(r) && st && akey !== r.alerted) {
@@ -1266,7 +1352,8 @@ function pickPlan() {
     .sort((a, b) => (a.updated ?? 0) - (b.updated ?? 0));
   const ready = tasks.filter((t) => t.column === "todo" && boardSet(t).pickup && !activeRun(t) && !t.attention && t.autopilot !== false)
     .sort((a, b) => (a.created ?? 0) - (b.created ?? 0));
-  return [...waiting.map((t) => ({ t, why: "waiting hand-off" })), ...ready.map((t) => ({ t, why: "pick up from To do" }))];
+  const free = (t) => !blockedBy(t, tasks).length; // dependencies first
+  return [...waiting.filter(free).map((t) => ({ t, why: "waiting hand-off" })), ...ready.filter(free).map((t) => ({ t, why: "pick up from To do" }))];
 }
 // Waiting work for members with room: hand-offs that wait first, then (on
 // boards with Pick up) To do tasks, oldest first.
@@ -1296,7 +1383,8 @@ function strandedHandoffs() {
   for (const t of tasks) {
     if (!stranded(t)) continue;
     const name = member(t.assignee, t)?.name ?? "its member";
-    updateTask(t.id, (cur) => ({ ...cur, queued: true, history: hist(cur, `Waits for ${name} to start (a hand-off that had not started)`, cur.assignee) }));
+    const deps = depsText(blockedBy(t, tasks));
+    updateTask(t.id, (cur) => ({ ...cur, queued: true, history: hist(cur, deps ? `${deps} before ${name} starts` : `Waits for ${name} to start (a hand-off that had not started)`, cur.assignee) }));
   }
 }
 
@@ -1304,12 +1392,16 @@ function strandedHandoffs() {
 // task left In progress or another run took over. Never a run in a pane the
 // person kept, never one that works or waits for the person.
 const IDLE_CLOSE_MS = 15 * 60000;
-export function closable(t, r, k, now = Date.now()) {
+// A finished run's idle session closes only when its task has sat in Done for
+// `doneMinutes` (machine setting cleanupDone, default 30; 0 = never): in Review
+// or while the task moves on, the person may still ask an agent something.
+export function closable(t, r, k, now = Date.now(), doneMinutes = 30) {
   if (!r?.result || r.closed || !k || k.state !== "live") return false;
   if (k.labels?.["herdr.tab"]) return false;
   if (k.status !== "idle" && k.status !== "done") return false;
-  const last = (t.runs ?? [])[t.runs.length - 1];
-  if (t.column === "doing" && last?.id === r.id) return false;
+  if (!(doneMinutes > 0) || t.column !== "done") return false;
+  const since = t.doneAt ?? t.updated ?? now;
+  if (now - since < doneMinutes * 60000) return false;
   return r.idleAt != null && now - r.idleAt > IDLE_CLOSE_MS;
 }
 function closeIdle() {
@@ -1322,7 +1414,7 @@ function closeIdle() {
       const idle = k && k.state === "live" && (k.status === "idle" || k.status === "done");
       const idleAt = idle ? (r.idleAt ?? now) : null;
       if ((r.idleAt ?? null) !== idleAt) updateTask(t.id, (cur) => ({ ...cur, runs: cur.runs.map((x) => (x.id === r.id ? { ...x, idleAt } : x)) }));
-      if (!closable(t, { ...r, idleAt }, k, now)) continue;
+      if (!closable(t, { ...r, idleAt }, k, now, Number(settings.cleanupDone ?? 30))) continue;
       killRun(r);
       const name = member(r.member, t)?.name ?? "An agent";
       updateTask(t.id, (cur) => ({ ...cur, runs: cur.runs.map((x) => (x.id === r.id ? { ...x, closed: now } : x)), history: hist(cur, `Closed ${name}'s idle session (finished ${Math.round((now - (r.ended ?? now)) / 60000)} min earlier)`, r.member) }));
@@ -1464,6 +1556,8 @@ async function boardFor(req) {
 async function startIfAsked(id) {
   const t = task(id);
   if (!t || t.column !== "doing" || !t.assignee || activeRun(t)) return { started: false };
+  const deps = depsText(blockedBy(t, tasks));
+  if (deps) { updateTask(t.id, (cur) => ({ ...cur, queued: true })); return { started: false, warning: `${deps}: it starts when they are in Review or Done.` }; }
   if (!settings.autopilot) return { started: false, warning: "Autopilot is off: nobody started. The person starts it on the board." };
   if (!shown(t)) {
     updateTask(t.id, { column: "todo" });
@@ -1474,7 +1568,7 @@ async function startIfAsked(id) {
 }
 
 // Fields the screen may change on a task.
-const EDITABLE = ["title", "description", "assignee", "column", "attention", "autopilot", "attachments", "queued"];
+const EDITABLE = ["title", "description", "assignee", "column", "attention", "autopilot", "attachments", "queued", "dependsOn"];
 
 const OPS = {
   async create(req, source, from) {
@@ -1489,13 +1583,14 @@ const OPS = {
     if (column === "doing" && !m) throw new Error('A task that starts in "doing" needs an assignee.');
     const id = typeof req.id === "string" && /^k[a-z0-9]{6,}$/.test(req.id) ? req.id : uid("k");
     const s = spaceOfBoard(b.id, req.space);
+    const dependsOn = depIds({ id, board: b.id }, req.dependsOn);
     tasks = [...tasks, {
       id, board: b.id, title, description: typeof req.description === "string" ? req.description : "",
       column: column === "doing" ? "todo" : column, assignee: m?.id ?? null,
       space: s?.id ?? null, folder: b.folder, dir: null,
       runs: [], history: [{ at: Date.now(), text: `Added by ${from}` }], attention: null,
       autopilot: req.autopilot !== false, attachments: Array.isArray(req.attachments) ? req.attachments : [],
-      created: Date.now(), updated: Date.now(), source,
+      created: Date.now(), updated: Date.now(), source, dependsOn,
     }];
     dirty = true;
     let start = { started: false };
@@ -1538,6 +1633,7 @@ const OPS = {
     const patch = {};
     for (const k of EDITABLE) if (req.patch && k in req.patch) patch[k] = req.patch[k];
     if ("column" in patch) patch.column = columnOf(patch.column);
+    if ("dependsOn" in patch) patch.dependsOn = depIds(t, patch.dependsOn);
     if ("assignee" in patch && patch.assignee) {
       const m = member(patch.assignee, t);
       if (!m) throw new Error(`No member "${patch.assignee}" in this board's team.`);
@@ -1545,7 +1641,9 @@ const OPS = {
       if (t.attention && /^Assign someone/.test(t.attention) && !("attention" in patch)) patch.attention = null;
     }
     updateTask(t.id, patch);
-    return { id: t.id };
+    // Moved into doing by an edit: blocked by its dependencies, it waits.
+    if (patch.column === "doing" && blockedBy(task(t.id), tasks).length && !activeRun(task(t.id))) updateTask(t.id, (cur) => ({ ...cur, queued: true }));
+    return { id: t.id, ...(blockedBy(task(t.id), tasks).length ? { waiting: depsText(blockedBy(task(t.id), tasks)) } : {}) };
   },
   async remove(req) {
     const t = task(String(req.id ?? ""));
@@ -1821,6 +1919,8 @@ function summary() {
         folder: boardOf(t)?.folder ?? t.folder ?? null, worktree: t.worktree ? { path: t.worktree.path, branch: t.worktree.branch } : null,
         task_folder: t.dir ? taskDir(t) : null,
         recent: (t.history ?? []).slice(-2).map((h) => String(h.text).slice(0, 300)),
+        depends_on: (t.dependsOn ?? []).map((id) => { const d = task(id); return d ? { id, title: d.title, column: d.column } : null; }).filter(Boolean),
+        waits_for: depsText(blockedBy(t, tasks)),
         updated: new Date(t.updated ?? t.created).toISOString(),
       };
     }),
@@ -1903,6 +2003,7 @@ async function pass() {
       setups();
       await rootBranches();
       strandedHandoffs();
+      depsWatch();
       await pickUp();
       closeIdle();
       save();

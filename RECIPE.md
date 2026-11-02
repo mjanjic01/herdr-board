@@ -17,11 +17,13 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
   - The member chip with the program icon and the model.
   - If the task has its own worktree: "⎇ <branch>".
   - A wait line: "Waits for Bo, who works on "<title>"", or "Waits for the usage limit to reset at 10pm".
+  - If its dependencies are not in Review or Done: "Waits for "<title>" (In progress)" or "Waits for 2 tasks: …".
   - If the task needs the person: a red note and a red border.
   - "N runs · 2h". If the task needs the person, "Unblock ↗" follows. If the task has an assignee and no run, "▶ Start" follows.
 - **Task dialog:**
   - The status and the column chip, then the member, the program and the model.
   - The description, rendered as markdown, with Copy and Source.
+  - Depends on: each dependency with its column, a green dot for Review or Done and a red one otherwise; a click opens it. The edit form has a picker of the board's other tasks (with a filter, without tasks that would make a loop).
   - Pull requests: each GitHub PR linked in the description, the history or the results, as "#<number> <title>" with Draft, Open, Merged or Closed, from `gh pr view --json number,title,state,isDraft` (refreshed every minute). A click opens it.
   - Attachments.
   - Runs: the task folder, and the worktree branch and path. Each run shows its member, start time, status and result, with Peek, "Open as tab" and Stop.
@@ -70,6 +72,8 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
   - "X has not started" after 60 s without a status.
   - "X stopped without writing a result" after 30 s idle.
   - Neither appears while the agent still runs a command, such as a long test.
+- **Dependencies:** a task's `dependsOn` lists tasks on the same board. Every start checks them (Start, a hand-off, Pick up, a move into In progress, a create in doing): until all are in Review or Done, launch refuses with "Waits for "<title>" (<column>)", a hand-off or a move waits as queued (no note), and Pick up skips the task. When they are done, the history says so once and the queued start or Pick up starts it. Inbox `create` and `update` take ids or exact titles; ids from another board and loops are refused. A deleted dependency counts as done.
+- **A question answered in the terminal:** when an agent that asked through a "blocked" result stopped and then works again (you answered by Peek), the "needs you" note clears and the history says so.
 - **Loop check:** if the same two members hand a task back and forth 6 times in a row, the task stops with a note. Start continues it.
 - **Unblock in tab:** writes `UNBLOCK.md` into the task folder on its machine (why the task needs the person, the waiting question, the description, the team, every run and hand-off, the history, the notes files, how to read the last agent's terminal, and the inbox requests for this task: reply, start, note, update, move). Then it opens a tab in the task's space running `claude --add-dir <task folder> -- "<read UNBLOCK.md…>"`. The session summarises, asks, and acts through the inbox only after the person agrees.
 - **Heavy jobs:**
@@ -81,7 +85,7 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
 - **Run limit:** at most 20 finished runs per task (− and + in the menu). Stopped or failed runs do not count.
 - **Cleanup:**
   - After a result, the engine closes the Chrome inside that agent's own process tree.
-  - Finished runs whose agent sits idle are closed after 15 minutes, unless the run is shown in a tab or is waiting for the person.
+  - Idle sessions of finished runs close once their task has sat in Done for 30 minutes (the Machine setting "Clean up after Done"; 0 = never) and the agent has been idle for 15. Tasks in other columns keep them. Never a run shown in a tab, working or waiting for the person.
 - **Secrets:** values go to the macOS Keychain of the team's machine, under service `herdr-board`. When a member starts, the agent gets them as environment variables, and its brief lists only the names.
 - **Teams across machines:** "Copy to machine…" copies the members by value. If the name is taken, the copy gets a new name. Programs missing there get a warning.
 - **Interaction:**
@@ -137,6 +141,7 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
 
 ## Done when
 
+- A task that depends on one in To do refuses Start with "Waits for "<title>" (To do)", queues when moved into In progress, and starts by itself (with Autopilot on and an open space) once the dependency reaches Review.
 - `herdr-app check mods/board` passes, and `node --test board/engine/engine.test.mjs board/*.test.js` passes.
 - Opening the board (`herdr-app do mod.open --name board`) installs `dev.herdr.board` (`launchctl list | grep herdr.board`). The engine log shows `engine <version> protocol 2`.
 - A fresh engine has the team "Starter" (Ana Planner, Bo Builder, Cy Reviewer).

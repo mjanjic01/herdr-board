@@ -239,7 +239,7 @@ export function updateTask(id, patch) {
   if (!t) return Promise.resolve();
   const p = typeof patch === "function" ? patch(t) : patch;
   const clean = {};
-  for (const k of ["title", "description", "assignee", "column", "attention", "autopilot", "attachments", "queued"]) if (k in p) clean[k] = p[k];
+  for (const k of ["title", "description", "assignee", "column", "attention", "autopilot", "attachments", "queued", "dependsOn"]) if (k in p) clean[k] = p[k];
   return request(t.machine ?? null, { op: "update", id, patch: clean }, { pend: { kind: "patch", id, patch: clean } });
 }
 // A new task on the board of `space`. Returns its id at once.
@@ -247,7 +247,7 @@ export function newTask(fields, space) {
   const machine = space?.machine ?? null;
   const id = fields.id ?? uid("k");
   const b = boardOfSpace(space);
-  const t = { id, title: fields.title, description: fields.description ?? "", column: fields.column ?? "todo", assignee: fields.assignee ?? null, attachments: fields.attachments ?? [] };
+  const t = { id, title: fields.title, description: fields.description ?? "", column: fields.column ?? "todo", assignee: fields.assignee ?? null, attachments: fields.attachments ?? [], dependsOn: fields.dependsOn ?? [] };
   const req = request(machine, { op: "create", ...t, space: local(space?.id), folder: b?.folder ?? null },
     { pend: { kind: "create", task: { ...t, board: b?.id, space: space?.id ?? null, runs: [], history: [], created: Date.now(), updated: Date.now() } } });
   return { id, done: req };
@@ -346,7 +346,7 @@ export async function unblockInTab(t) {
   L.push("The person opened this session from the Herdr board, because this task needs them. Help them understand what is going on and decide. Do not change the board or the code until they agree; then act through the board as shown below.", "");
   L.push("## Why it needs the person", "");
   L.push(t.attention ? `Board note: ${t.attention}` : "There is no board note.");
-  if (r?.blocked) L.push("", `The agent's question (${nameOf(r.member)}, waiting in its terminal):`, "", "> " + String(r.blocked).split("\n").join("\n> "));
+  if (r?.blocked && !r.blockAnswered) L.push("", `The agent's question (${nameOf(r.member)}, waiting in its terminal):`, "", "> " + String(r.blocked).split("\n").join("\n> "));
   else if (r?.stall) L.push("", `Stall: ${r.stall}`);
   if (r?.limit) L.push("", `Usage limit: until ${r.limit.until ?? "unknown"}.`);
   L.push("");
@@ -389,6 +389,34 @@ export async function unblockInTab(t) {
     ? ["sh", "-c", 's=${SHELL:-/bin/zsh}; "$s" -lic \'"$@"\' "$s" "$@"; exec "$s" -li', "sh", ...claude]
     : claude;
   run("tab.new", { name: `Unblock: ${t.title}`.slice(0, 40), space: space.id, argv });
+}
+
+// ---- dependencies (the engine enforces them; the screen shows them) ----
+
+// The other tasks on the board of `t` (same machine, same board).
+export const boardMates = (t) => tasks().filter((x) => x.id !== t?.id && (x.machine ?? null) === (t?.machine ?? null) && x.board === t?.board);
+export const DEP_DONE = new Set(["review", "done"]);
+// The dependencies of `t` that are not in Review or Done yet (gone ones count as done).
+export const depsOpen = (t) => (t?.dependsOn ?? []).map((id) => tasks().find((x) => x.id === id && (x.machine ?? null) === (t.machine ?? null))).filter((d) => d && !DEP_DONE.has(d.column));
+export function depsLine(t) {
+  const open = depsOpen(t);
+  if (!open.length) return null;
+  const col = (c) => column(c).name;
+  if (open.length === 1) return `Waits for "${open[0].title}" (${col(open[0].column)})`;
+  return `Waits for ${open.length} tasks: ${open.map((d) => `"${d.title}" (${col(d.column)})`).join(", ")}`;
+}
+// Would depending on `depId` make a loop for task `id`?
+export function depLoops(id, depId) {
+  const seen = new Set();
+  const stack = [depId];
+  while (stack.length) {
+    const d = stack.pop();
+    if (d === id) return true;
+    if (seen.has(d)) continue;
+    seen.add(d);
+    stack.push(...(tasks().find((x) => x.id === d)?.dependsOn ?? []));
+  }
+  return false;
 }
 
 // ---- live state of runs ----

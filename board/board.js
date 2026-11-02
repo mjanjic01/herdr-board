@@ -3,7 +3,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Popover } from "gpui-base";
 import { theme, props, openOverlay, closeOverlay, run, focused, notify } from "herdr";
-import { unblockInTab, COLUMNS, MOD, tasks, tasksOf, team, member, column, activeRun, liveStatus, runLimit, updateTask, launch, boardSettings, setBoardSettings, setBoardTeam, boardOfSpace, teamsOf, stateOf, outdated, lead, poll, ensureEngine, served, request, programTable, uid, programs, knownNow, ago, spaces, busyOn } from "./state.js";
+import { depsLine, DEP_DONE, unblockInTab, COLUMNS, MOD, tasks, tasksOf, team, member, column, activeRun, liveStatus, runLimit, updateTask, launch, boardSettings, setBoardSettings, setBoardTeam, boardOfSpace, teamsOf, stateOf, outdated, lead, poll, ensureEngine, served, request, programTable, uid, programs, knownNow, ago, spaces, busyOn } from "./state.js";
 import { button, tiny, memberChip, programIcon, statusGlyph, STATUS_WORDS, colorOf, dot } from "./ui.js";
 import { noteOf, plain, clip } from "./note.js";
 import { limitLine } from "./limit.js";
@@ -143,7 +143,8 @@ export class Board extends View {
         .when(Boolean(m?.model), (el) => el.child(div().text_size(10.5).text_color(tm.dim).truncate().child(m.model)))
         .child(div().flex_1())
         .when(Boolean(space), (el) => el.child(div().text_size(10.5).text_color(tm.dim).truncate().max_w(90).child(space.name))))
-      .when(Boolean(t.queued && !run && t.column === "doing"), (el) => el.child(div().text_size(11).text_color(tm.dim).child(t.wait || waitText(t, m))))
+      .when(!run && !DEP_DONE.has(t.column) && Boolean(depsLine(t)), (el) => el.child(div().text_size(11).text_color(tm.dim).child(depsLine(t))))
+      .when(Boolean(t.queued && !run && t.column === "doing" && !depsLine(t)), (el) => el.child(div().text_size(11).text_color(tm.dim).child(t.wait || waitText(t, m))))
       .when(Boolean(t.warn), (el) => el.child(div().text_size(11).text_color(tm.done ?? tm.dim).child(t.warn)))
       .when(status === "limited", (el) => el.child(div().text_size(11).text_color(tm.muted).child(limitLine(runLimit(run)))))
       .when(Boolean(t.slotWait && run), (el) => el.child(div().text_size(11).text_color(tm.dim).child(t.slotWait)))

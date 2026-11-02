@@ -17,6 +17,8 @@ files in `~/.herdr/board/`.
    `~/.herdr/board/inbox/`: write a dot-named temp file, then rename it to
    `<unique name>.json`. Name the board by `folder`: the absolute path of the
    repository or worktree. Use member names from that board's team.
+   A task can wait for others: give `dependsOn` (ids or exact titles on the
+   same board); it starts only when they are in Review or Done.
 4. Wait about 2 seconds. Then read `inbox/done/<name>.json` or
    `inbox/failed/<name>.json`, and tell the person what happened.
 
