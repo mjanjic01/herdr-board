@@ -32,6 +32,7 @@ Read this before you install it:
 - **Git worktrees and branches.** Each task gets its own worktree, under `~/.herdr/worktrees/<repo>/`, on a branch named `board/…`. It never deletes a worktree that has changes.
 - **Secrets in the macOS Keychain.** A member's secrets are kept in the Keychain of its machine, under the service `herdr-board`. Agents get them as environment variables. The values never go into the board's files.
 - **Chrome cleanup.** After an agent writes its result, the engine closes the Chrome that agent started, and only that one. Agents that sit idle after their run are closed after 15 minutes.
+- **Lower priority and a limit on heavy jobs.** Agents run under `nice -n 10`. Browser and e2e suites run through the bundled `board-heavy` script, one at a time per machine by default. While a machine is short of memory or far over its cores, the board starts no new agents there.
 - **No network calls of its own.** The board itself only talks to your machines. The agents it starts use their own network as usual.
 
 ## Using it
@@ -43,6 +44,14 @@ Read this before you install it:
 - **Board setup and notes…** sets a command for each new worktree, for example `npm ci`. It also holds notes for every agent's brief, and your standing answers to questions that agents ask often.
 
 `board/README.md` describes how it is built, and `RECIPE.md` describes how to build it from scratch.
+
+## Heavy jobs
+
+Browser and e2e suites can overload a machine. The board guards it in three ways:
+
+- **Low priority.** Every agent and everything it starts runs under `nice -n 10`, so the machine keeps answering ssh and the network.
+- **Browser slots.** Agents run suites through `"$BOARD_HEAVY"` (the board's `board-heavy`), which waits for one of the machine's slots (default 1) and runs the suite at low priority. `$BOARD_WORKERS` (default 4 per board) caps its workers. Set both in "Board setup and notes…".
+- **The load gate.** Under memory pressure, or a load over 1.5 × the cores, the board starts nothing new on that machine until it calms down. Running work goes on, and the header says "busy".
 
 ## License
 

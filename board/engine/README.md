@@ -148,3 +148,29 @@ into `board.json`, the state files, a brief or the inbox. When the engine starts
 that member, the agent gets the values as environment variables, and its brief
 names them. You set the values in the Teams window. Requests in the inbox
 cannot set, read or list secret values.
+
+## Heavy jobs and a busy machine
+
+Browser, e2e and Playwright suites are heavy. Several at once can make a
+machine so slow that it drops off the network. The board limits them in three
+ways:
+
+- **Agents run at low priority.** Every agent, and everything it starts, runs
+  under `nice -n 10` (the machine setting `niceness`, 0 turns it off). The
+  machine stays responsive to ssh and the network.
+- **Browser slots.** Run a suite through `"$BOARD_HEAVY"`, the board's
+  `board-heavy` script (in `bin/` here): `"$BOARD_HEAVY" npm run test:e2e --
+  --workers=$BOARD_WORKERS`. It waits until one of the machine's slots is free
+  (the machine setting `heavySlots`, default 1), runs the suite at low
+  priority, and frees the slot when it ends. While it waits, the task's card
+  says "Waits for a browser slot (held by …)". `$BOARD_WORKERS` is the board's
+  `workers` setting (default 4); the same number is in `PLAYWRIGHT_WORKERS`,
+  `PW_WORKERS` and `E2E_WORKERS`.
+- **The load gate.** While the kernel reports memory pressure (warning or
+  critical) or the 1-minute load is over 1.5 × the cores, the engine starts
+  nothing new on this machine: no hand-offs, pick-ups or waiting starts.
+  Running work goes on, and a Start by the person still works. Cards say
+  "Waits: <machine> is busy (memory)", and the board's header says "busy". It
+  opens after two calm checks in a row. The machine settings `gatePressure`
+  (2), `gateLoad` (1.5) and `gateSwap` (0: off, because macOS keeps swap once
+  it grew) set the limits.

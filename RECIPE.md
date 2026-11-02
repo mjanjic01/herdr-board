@@ -67,6 +67,11 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
   - Neither appears while the agent still runs a command, such as a long test.
 - **Loop check:** if the same two members hand a task back and forth 6 times in a row, the task stops with a note. Start continues it.
 - **Unblock in tab:** writes `UNBLOCK.md` into the task folder on its machine (why the task needs the person, the waiting question, the description, the team, every run and hand-off, the history, the notes files, how to read the last agent's terminal, and the inbox requests for this task: reply, start, note, update, move). Then it opens a tab in the task's space running `claude --add-dir <task folder> -- "<read UNBLOCK.md…>"`. The session summarises, asks, and acts through the inbox only after the person agrees.
+- **Heavy jobs:**
+  - Every agent starts under `/usr/bin/nice -n 10` (machine setting `niceness`), so all it starts inherits the priority.
+  - `board-heavy <command…>` (installed as `<home>/bin/board-heavy`, `$BOARD_HEAVY`) takes a machine-wide slot: a symlink `<home>/heavy/slot-N` whose target is `<pid>:<task>:<run>:<start>`, created atomically; a slot whose pid is gone is taken over. While it waits it leaves `<home>/heavy/wait-<pid>`, and the card says "Waits for a browser slot (held by "<task>")". It runs the command at `nice -n 10` in the background and waits for it, so a signal frees the slot at once; the exit code is the command's. Slots: machine setting `heavySlots` (1).
+  - Every agent gets `BOARD_HEAVY`, `BOARD_HOME`, `BOARD_HEAVY_SLOTS`, `BOARD_TASK`, `BOARD_RUN`, and the board's `workers` (4) as `BOARD_WORKERS`, `PLAYWRIGHT_WORKERS`, `PW_WORKERS` and `E2E_WORKERS`.
+  - **Load gate:** at most every 10 s the engine reads `sysctl -n kern.memorystatus_vm_pressure_level vm.swapusage vm.loadavg hw.ncpu`. Pressure ≥ `gatePressure` (2, warning), or a 1-minute load over `gateLoad` × cores (1.5), closes the gate; `gateSwap` (0) is off by default. It opens after 2 calm checks. While closed, hand-offs, pick-ups and waiting starts wait ("Waits: <machine> is busy (memory)"); running work and a Start by the person are not stopped. `loadGate` is in `state.json`, and the header shows "busy (…): no new starts".
 - **Run limit:** at most 20 finished runs per task (− and + in the menu). Stopped or failed runs do not count.
 - **Cleanup:**
   - After a result, the engine closes the Chrome inside that agent's own process tree.
@@ -115,6 +120,9 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
 - **Expect a trust question in every new worktree.** Each one is a new folder for Claude, so Claude asks whether to trust it. Trusting a parent folder does not cover it. The card shows the wait.
 - **Handle Keychain values in the engine.** The Keychain opens only inside the login session. herdr-core started over ssh cannot read it, so the engine (launchd, inside the session) hands values over through its socket.
 - **Expect a restart to wait for a login.** A user launchd agent starts after a login. Without automatic login, a restarted Mac runs no engine until someone logs in.
+- **Do not gate on swap.** macOS grows its swap files on demand and seldom shrinks them, so 90% or more swap in use is normal on a healthy Mac. Use the kernel's memory pressure level instead.
+- **Point agents at `"$BOARD_HEAVY"`, not `board-heavy` on PATH.** The login shell, and Claude's Bash tool, may rebuild PATH from the person's profile.
+- **A shell script's trap waits for a foreground child.** `board-heavy` runs the command in the background and `wait`s, so a TERM frees the slot at once.
 - **Tabs mode gives runs unnamed tabs.** Herdr shows the tab's number.
 - **Engine updates need an open board.** An engine update reaches a machine only while a board view is open somewhere.
 
@@ -128,4 +136,5 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
 - With Pick up on and capacity 1, a member takes one To do task. The next one waits until the first finishes.
 - A secret set in the Teams window shows "•••• set". It reaches the agent as an environment variable, and it appears in no file under the board home.
 - On a task that needs the person, "Unblock ↗" writes `UNBLOCK.md` in its task folder and opens a tab where Claude summarises the block, also for a space on another machine. Back on the board, no card follows the pointer.
+- `sh board/engine/board-heavy.test.sh` passes: the exit code passes through, a stale slot is taken over, a second job waits with a marker, TERM frees the slot. An agent's shell shows `ps -o ni` 10, and `$BOARD_WORKERS` equals the board's workers.
 - With the Herdr app closed, a hand-off between two members still starts the next one.

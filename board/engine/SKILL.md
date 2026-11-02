@@ -20,6 +20,11 @@ files in `~/.herdr/board/`.
 4. Wait about 2 seconds. Then read `inbox/done/<name>.json` or
    `inbox/failed/<name>.json`, and tell the person what happened.
 
+To run a browser, e2e or Playwright suite on this machine, run it through
+`"$BOARD_HEAVY"` (the board's `board-heavy`, in `~/.herdr/board/bin/`) with
+`--workers=$BOARD_WORKERS`. It waits for the machine's browser slot, so suites
+never run side by side.
+
 You can be a member of the board team: your first message then says that the
 Herdr board coordinates you. In that case, write requests only when the
 person asks.

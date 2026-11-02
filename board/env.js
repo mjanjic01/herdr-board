@@ -16,8 +16,10 @@ export class EnvView extends View {
     this.setup = InputState.new({ value: s.setup ?? "", placeholder: "e.g. npm ci (runs in each new task worktree)" });
     this.notes = TextareaState.new({ value: s.envNotes ?? "", placeholder: "What every agent on this board should know about this machine" });
     this.answers = TextareaState.new({ value: s.standing ?? "", placeholder: "e.g. Review deployment box: always tick it." });
+    this.slots = InputState.new({ value: String(s.heavySlots ?? 1), placeholder: "1" });
+    this.workers = InputState.new({ value: String(s.workers ?? 4), placeholder: "4" });
     this.focused = null;
-    for (const [k, st] of Object.entries({ setup: this.setup, notes: this.notes, answers: this.answers })) {
+    for (const [k, st] of Object.entries({ setup: this.setup, notes: this.notes, answers: this.answers, slots: this.slots, workers: this.workers })) {
       st.on("focus", (_e, cx) => { this.focused = k; cx.notify(); });
       st.on("blur", (_e, cx) => { if (this.focused === k) this.focused = null; cx.notify(); });
     }
@@ -32,14 +34,16 @@ export class EnvView extends View {
   ctx() { const b = boardOfSpace(this.space()); return b ? { machine: b.machine, board: b.id } : null; }
 
   close() {
-    for (const st of [this.setup, this.notes, this.answers]) st.release?.();
+    for (const st of [this.setup, this.notes, this.answers, this.slots, this.workers]) st.release?.();
     closeOverlay(props().overlay);
   }
 
   save(cx) {
     this.busy = true; this.error = "";
     cx.notify();
-    const patch = { setup: this.setup.value().trim(), envNotes: this.notes.value().trim(), standing: this.answers.value().trim() };
+    const int = (st, lo, hi, d) => { const n = Math.floor(Number(st.value())); return Number.isFinite(n) && n >= lo ? Math.min(hi, n) : d; };
+    const patch = { setup: this.setup.value().trim(), envNotes: this.notes.value().trim(), standing: this.answers.value().trim(),
+      heavySlots: int(this.slots, 1, 8, 1), workers: int(this.workers, 1, 32, 4) };
     cx.spawn(async (cx) => {
       try { await setBoardSettings(this.space(), patch); this.busy = false; this.close(); }
       catch (e) { this.busy = false; this.error = String(e?.message ?? e); cx.notify(); }
@@ -60,7 +64,14 @@ export class EnvView extends View {
         .child(label("Environment notes: go into every brief on this board"))
         .child(area(this.notes, "notes", 150))
         .child(label("Standing answers: decisions agents follow without asking you"))
-        .child(area(this.answers, "answers", 150)))
+        .child(area(this.answers, "answers", 150))
+        .child(h_flex().gap(16).items_start()
+          .child(v_flex().flex_1()
+            .child(label("Browser slots: suites at once on this machine (board-heavy)"))
+            .child(div().w(90).child(field(this.slots, this.focused === "slots"))))
+          .child(v_flex().flex_1()
+            .child(label("Workers per suite on this board ($BOARD_WORKERS)"))
+            .child(div().w(90).child(field(this.workers, this.focused === "workers"))))))
       .when(Boolean(this.error), (el) => el.child(div().pt(8).text_size(12).text_color(tm.blocked).child(this.error)))
       .child(h_flex().pt(12).gap(8).justify_end()
         .child(button("env-cancel", "Cancel", () => this.close()))

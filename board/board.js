@@ -146,6 +146,7 @@ export class Board extends View {
       .when(Boolean(t.queued && !run && t.column === "doing"), (el) => el.child(div().text_size(11).text_color(tm.dim).child(t.wait || waitText(t, m))))
       .when(Boolean(t.warn), (el) => el.child(div().text_size(11).text_color(tm.done ?? tm.dim).child(t.warn)))
       .when(status === "limited", (el) => el.child(div().text_size(11).text_color(tm.muted).child(limitLine(runLimit(run)))))
+      .when(Boolean(t.slotWait && run), (el) => el.child(div().text_size(11).text_color(tm.dim).child(t.slotWait)))
       .when(Boolean(t.worktree?.branch), (el) => el.child(div().text_size(10.5).text_color(tm.dim).truncate().child(`⎇ ${t.worktree.branch}`)))
       .when(Boolean(t.attention), (el) => {
         const n = noteOf(t);
@@ -257,6 +258,7 @@ export class Board extends View {
     const working = all.filter((t) => liveStatus(t) === "working").length;
     const needs = all.filter((t) => t.attention || liveStatus(t) === "blocked").length;
     const limited = all.filter((t) => liveStatus(t) === "limited").length;
+    const gate = stateOf(boardOfSpace(space)?.machine ?? space?.machine ?? null)?.loadGate ?? null;
     const overlay = props()?.overlay;
     return h_flex().items_center().gap(10).px(14).h(46).flex_none().border_b(1).border_color(tm.border)
       .child(div().text_size(15).font_semibold().text_color(tm.foreground).child("Board"))
@@ -265,6 +267,8 @@ export class Board extends View {
       .child(div().text_size(11.5).text_color(tm.dim).child(`${all.length} task${all.length === 1 ? "" : "s"}`))
       .when(working > 0, (el) => el.child(h_flex().items_center().gap(5).text_size(11.5).text_color(tm.working).child(svg(`mods/${MOD}/spinner.svg`).size(11).text_color(tm.working).spin(900)).child(`${working} working`)))
       .when(needs > 0, (el) => el.child(h_flex().items_center().gap(5).text_size(11.5).text_color(tm.blocked).child(dot(tm.blocked, 8)).child(`${needs} need${needs === 1 ? "s" : ""} you`)))
+      .when(Boolean(gate), (el) => el.child(h_flex().id("busy-gate").items_center().gap(5).text_size(11.5).text_color(tm.blocked)
+        .child(dot(tm.blocked, 8)).child(`busy (${gate.why}): no new starts`)))
       .when(limited > 0, (el) => el.child(h_flex().items_center().gap(5).text_size(11.5).text_color(tm.muted).child(statusGlyph("limited", 8)).child(`${limited} at usage limit`)))
       .child(div().flex_1())
       .child(this.settingsMenu(s))

@@ -124,9 +124,12 @@ const FISH = SHELL.split("/").pop() === "fish";
 // session's child (no transcript, its messaging socket). Agents start clean.
 export const LEAKED_ENV = ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH",
   "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_SESSION_ID", "CLAUDE_EFFORT", "CLAUDE_PID"];
+// The agent and all it starts run at a lower priority (settings.niceness), so a
+// busy machine still answers ssh, Tailscale and Herdr.
+export const niced = (argv, n) => (Number(n) > 0 ? ["/usr/bin/nice", "-n", String(Math.min(19, Math.floor(Number(n)))), ...argv] : argv);
 function wrapped(argv, pre = "", after = "") {
-  if (FISH) return [SHELL, "-lic", `set -e ${LEAKED_ENV.join(" ")} 2>/dev/null; ${pre}$argv; ${after}exec fish -li`, ...argv];
-  return [SHELL, "-lic", `unset ${LEAKED_ENV.join(" ")}; ${pre}"$@"; ${after}exec "$0" -li`, SHELL, ...argv];
+  if (FISH) return niced([SHELL, "-lic", `set -e ${LEAKED_ENV.join(" ")} 2>/dev/null; ${pre}$argv; ${after}exec fish -li`, ...argv], settings.niceness);
+  return niced([SHELL, "-lic", `unset ${LEAKED_ENV.join(" ")}; ${pre}"$@"; ${after}exec "$0" -li`, SHELL, ...argv], settings.niceness);
 }
 const found = {};
 async function installed(cmd) {
@@ -470,7 +473,11 @@ export const COLUMNS = [
   { id: "backlog", name: "Backlog" }, { id: "todo", name: "To do" }, { id: "doing", name: "In progress" },
   { id: "review", name: "Review" }, { id: "done", name: "Done" },
 ];
-const DEFAULT_SETTINGS = { autopilot: true, maxRuns: 20, openTabs: false, programs: {} };
+// niceness: every agent runs under `nice -n <n>` (0: off). heavySlots: browser
+// suites at once on this machine (board-heavy). gate*: the load gate's limits.
+// gateSwap is off (0) by default: macOS grows swap on demand and keeps it, so a
+// high used share is normal; memory pressure is the kernel's own verdict.
+const DEFAULT_SETTINGS = { autopilot: true, maxRuns: 20, openTabs: false, programs: {}, niceness: 10, heavySlots: 1, gatePressure: 2, gateSwap: 0, gateLoad: 1.5 };
 
 // The run limit counts finished runs only: a run that ended with a hand-off or
 // a result. A stopped, failed or restarted run is not a loop.
@@ -499,8 +506,9 @@ export const DEFAULT_ENV_NOTES = [
   "- The shell is zsh: quote globs (`--include='*.tsx'`) and avoid a bare `=word`.",
   "- Before you write your result, close every Chrome you opened: its pages through your browser tools, then any Chrome still running with your user-data-dir. The board also closes them after your result.",
   "- Never open links, files or artifacts in a desktop app on this machine (Safari, Preview, `open <url>`). Use only your own Chrome through the browser tools.",
+  "- Run any browser, e2e or Playwright suite through `\"$BOARD_HEAVY\"` (the board's `board-heavy`) with `--workers=$BOARD_WORKERS`, for example `\"$BOARD_HEAVY\" npm run test:acceptance -- --workers=$BOARD_WORKERS`. It waits for this machine's browser slot, so suites never run side by side, and runs at low priority.",
 ].join("\n");
-const DEFAULT_BOARD = { pickup: false, worktrees: true, setup: "", envNotes: DEFAULT_ENV_NOTES, standing: "" };
+const DEFAULT_BOARD = { pickup: false, worktrees: true, setup: "", envNotes: DEFAULT_ENV_NOTES, standing: "", workers: 4 };
 
 let tasks = [];
 let boards = [];   // { id, folder, team, settings: { pickup, worktrees }, created }
@@ -713,7 +721,7 @@ async function argvFor(m, dir) {
 
 // queued: a start by the engine itself (a pickup or a waiting hand-off).
 async function launch(t, memberId, { queued = false } = {}) {
-  if (queued && limitWait()) throw Object.assign(new Error(limitWait()), { wait: true, limit: true });
+  if (queued && startGate()) throw Object.assign(new Error(startGate()), { wait: true, limit: true });
   const b = boardOf(t);
   if (!b) throw new Error("The task has no board.");
   const m = member(memberId ?? t.assignee, t);
@@ -748,6 +756,15 @@ async function launch(t, memberId, { queued = false } = {}) {
   if (settings.openTabs && space) { tab = uid("tb"); Object.assign(labels, { "herdr.space": space.id, "herdr.tab": tab }); }
   if (DRY) throw new Error("dry run");
   const sec = secretShell(t, m);
+  // What board-heavy and the test runners need: the slot script on PATH, this
+  // run's ids, and the board's worker cap (E2E_WORKERS too: some e2e configs read it).
+  const workers = Math.max(1, Math.floor(Number(boardSet(t).workers) || 4));
+  const env = { BOARD_HOME: HOME, BOARD_HEAVY: path.join(HOME, "bin", "board-heavy"), BOARD_HEAVY_SLOTS: String(Math.max(1, Math.floor(Number(settings.heavySlots) || 1))),
+    BOARD_TASK: t.id, BOARD_RUN: runId, BOARD_WORKERS: String(workers), PLAYWRIGHT_WORKERS: String(workers), PW_WORKERS: String(workers), E2E_WORKERS: String(workers) };
+  const envPre = FISH
+    ? `${Object.entries(env).map(([k, v]) => `set -gx ${k} ${q1(v)};`).join(" ")} set -gx PATH ${q1(path.join(HOME, "bin"))} $PATH; `
+    : `export ${Object.entries(env).map(([k, v]) => `${k}=${q1(v)}`).join(" ")} PATH=${q1(path.join(HOME, "bin"))}:"$PATH"; `;
+  sec.pre = envPre + sec.pre;
   // A new worktree runs the board's setup first, in the agent's terminal, its
   // output and exit code in the task folder; the agent starts either way.
   const setup = wt?.fresh && String(boardSet(t).setup ?? "").trim();
@@ -843,8 +860,8 @@ async function results() {
         const [a, b] = loop.map((id) => member(id, after)?.name ?? id);
         updateTask(after.id, { attention: `${a} and ${b} handed this back and forth ${LOOP} times in a row. Read the notes, then press Start to let ${done.to.name} go on, or change the task.` });
         event("warning", `${after.title}: a loop?`, `${a} and ${b} handed it back and forth ${LOOP} times.`);
-      } else if (settings.autopilot && after.autopilot !== false && limitWait()) {
-        updateTask(after.id, (cur) => ({ ...cur, queued: true, wait: limitWait(), history: hist(cur, `${limitWait()} before ${done.to.name} starts`, done.to.id) }));
+      } else if (settings.autopilot && after.autopilot !== false && startGate()) {
+        updateTask(after.id, (cur) => ({ ...cur, queued: true, wait: startGate(), history: hist(cur, `${startGate()} before ${done.to.name} starts`, done.to.id) }));
       } else if (settings.autopilot && after.autopilot !== false) {
         if (!hasRoom(done.to, after.board)) {
           const on = tasks.find((x) => x.board === after.board && activeRun(x)?.member === done.to.id);
@@ -918,6 +935,91 @@ function updateLimitGate() {
   if (limitGate && now > limitGate.until + LIMIT_MARGIN_MS) { limitGate = null; dirty = true; }
 }
 export const limitWait = () => (limitGate && Date.now() < limitGate.until + LIMIT_MARGIN_MS ? `Waits for the usage limit to reset at ${limitGate.text}` : null);
+// ---- the load gate ----
+//
+// A machine that is out of memory or far over its cores gets no new starts
+// (hand-offs, pick-ups, waiting starts) until it is calm for two checks in a
+// row. Running work is never touched; a manual Start still works.
+let loadGate = null; // { why: "memory" | "swap" | "load", since, calm, detail }
+let lastLoadCheck = 0;
+// The machine's numbers, as `sysctl -n kern.memorystatus_vm_pressure_level vm.swapusage vm.loadavg hw.ncpu` prints them.
+export function parseLoad(text) {
+  const lines = String(text).split("\n").map((x) => x.trim()).filter(Boolean);
+  const num = (x) => { const m = /([\d.]+)M/.exec(x ?? ""); return m ? Number(m[1]) : null; };
+  const sw = lines.find((l) => l.includes("total ="));
+  const avg = lines.find((l) => l.startsWith("{"));
+  const ints = lines.filter((l) => /^\d+$/.test(l)).map(Number);
+  return {
+    pressure: ints[0] ?? null,
+    ncpu: ints[1] ?? null,
+    swapTotal: sw ? num(sw.split("total =")[1]) : null,
+    swapUsed: sw ? num(sw.split("used =")[1]) : null,
+    load1: avg ? Number(avg.replace(/[{}]/g, "").trim().split(/\s+/)[0]) : null,
+  };
+}
+// Why the machine is too busy for new starts, or null.
+export function loadVerdict(n, s) {
+  if (n.pressure != null && n.pressure >= (s.gatePressure ?? 2)) return { why: "memory", detail: n.pressure >= 4 ? "memory pressure critical" : "memory pressure warning" };
+  if (s.gateSwap > 0 && n.swapTotal > 0 && n.swapUsed / n.swapTotal > s.gateSwap) return { why: "swap", detail: `swap ${Math.round((100 * n.swapUsed) / n.swapTotal)}% used` };
+  if (n.ncpu > 0 && n.load1 > (s.gateLoad ?? 1.5) * n.ncpu) return { why: "load", detail: `load ${n.load1.toFixed(1)} on ${n.ncpu} cores` };
+  return null;
+}
+async function checkLoad() {
+  if (Date.now() - lastLoadCheck < 10000) return;
+  lastLoadCheck = Date.now();
+  const r = await run("sysctl", ["-n", "kern.memorystatus_vm_pressure_level", "vm.swapusage", "vm.loadavg", "hw.ncpu"], { timeout: 5000 });
+  if (r.code !== 0 && !r.stdout) return;
+  const v = loadVerdict(parseLoad(r.stdout), settings);
+  if (v) {
+    if (!loadGate || loadGate.why !== v.why || loadGate.calm) { if (!loadGate) log("load gate on:", v.detail); loadGate = { why: v.why, detail: v.detail, since: loadGate?.since ?? Date.now(), calm: 0 }; dirty = true; }
+    else if (loadGate.detail !== v.detail) { loadGate = { ...loadGate, detail: v.detail }; dirty = true; }
+  } else if (loadGate) {
+    const calm = (loadGate.calm ?? 0) + 1;
+    if (calm >= 2) { log("load gate off"); loadGate = null; } else loadGate = { ...loadGate, calm };
+    dirty = true;
+  }
+}
+export const loadWait = () => (loadGate ? `Waits: ${MACHINE ?? os.hostname()} is busy (${loadGate.why})` : null);
+// Why the engine starts nothing new right now (usage limit, then load), or null.
+const startGate = () => limitWait() ?? loadWait();
+const GATE_WAIT = /^Waits: .* is busy \(|^Waits for the usage limit/;
+// A gate that opened leaves no stale note on cards; a slot wait shows who holds the slot.
+function gateWaits() {
+  const g = startGate();
+  for (const t of tasks) if (t.wait && GATE_WAIT.test(t.wait) && t.wait !== g && !activeRun(t)) updateTask(t.id, (cur) => ({ ...cur, wait: g && cur.queued ? g : null }));
+}
+
+// ---- browser slots (board-heavy) ----
+//
+// board-heavy takes one of the machine's slots (symlinks heavy/slot-N whose
+// target is "<pid>:<task>:<run>:<start>"), and while it waits it leaves
+// heavy/wait-<pid> with the same text. The engine shows that on the card.
+const HEAVY = () => P("heavy");
+export function heavyState(dir = HEAVY(), alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } }) {
+  const held = []; const waiting = [];
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return { held, waiting }; }
+  const parse = (x) => { const [pid, task, run, start] = String(x).trim().split(":"); return { pid: Number(pid), task: task || null, run: run || null, start: Number(start) || null }; };
+  for (const n of names) {
+    try {
+      if (/^slot-\d+$/.test(n)) { const o = parse(fs.readlinkSync(path.join(dir, n))); if (alive(o.pid)) held.push({ slot: n, ...o }); }
+      else if (/^wait-\d+$/.test(n)) { const o = parse(fs.readFileSync(path.join(dir, n), "utf8")); if (alive(o.pid)) waiting.push(o); }
+    } catch {}
+  }
+  return { held, waiting };
+}
+function heavyWaits() {
+  const { held, waiting } = heavyState();
+  const name = (id) => task(id)?.title ?? "another job";
+  const text = (x) => `Waits for a browser slot (held by ${held.length ? held.map((h) => (h.task ? `"${name(h.task)}"` : "another job")).join(", ") : "another job"})`;
+  const want = new Map(waiting.filter((w) => w.task).map((w) => [w.task, text(w)]));
+  for (const t of tasks) {
+    const cur = t.slotWait ?? null;
+    const next = want.get(t.id) ?? null;
+    if (cur !== next) updateTask(t.id, (x) => ({ ...x, slotWait: next }));
+  }
+}
+
 const LIMIT_FIELDS = ["limit", "limitKey", "limitHold", "limitReadAt", "limitSeen"];
 async function limits() {
   if (!world.ok) return;
@@ -1409,7 +1511,9 @@ const OPS = {
     const t = own(req.id);
     if (req.restart) { const r = activeRun(t); if (r) endRun(t.id, r.id, "stopped"); }
     const e = await launch(task(t.id), req.member ?? null);
-    return { id: t.id, terminal: e.terminal };
+    const busy = loadWait();
+    if (busy) updateTask(t.id, (cur) => ({ ...cur, history: hist(cur, `Started by hand while ${MACHINE ?? os.hostname()} is busy (${loadGate.detail})`) }));
+    return { id: t.id, terminal: e.terminal, ...(busy ? { warning: `${MACHINE ?? "This machine"} is busy (${loadGate.detail}).` } : {}) };
   },
   async stop(req) {
     const t = own(req.id);
@@ -1644,7 +1748,7 @@ function save() {
     writeAtomic(P("settings.json"), JSON.stringify(settings, null, 2));
   }
   const seq = Date.now();
-  writeAtomic(P("state.json"), JSON.stringify({ protocol: PROTOCOL, version: VERSION, machine: MACHINE, home: HOME, secretClient: { node: process.execPath, engine: ENGINE_FILE }, limitGate, boardDefaults: DEFAULT_BOARD, seq, tasks, boards, teams, settings, spaces: world.spaceBoards, live: liveNow, events, applied }));
+  writeAtomic(P("state.json"), JSON.stringify({ protocol: PROTOCOL, version: VERSION, machine: MACHINE, home: HOME, secretClient: { node: process.execPath, engine: ENGINE_FILE }, limitGate, loadGate, boardDefaults: DEFAULT_BOARD, seq, tasks, boards, teams, settings, spaces: world.spaceBoards, live: liveNow, events, applied }));
   writeAtomic(P("seq"), String(seq));
   dirty = false;
   lastLive = liveText;
@@ -1703,6 +1807,7 @@ async function dryRun(file) {
     const used = room.get(key) ?? busyCount(t.board, m?.id);
     if (!m) decided.set(t.id, "would flag: no member");
     else if (!shown(t)) decided.set(t.id, `would wait (${why}): no open space shows its board`);
+    else if (startGate()) decided.set(t.id, `would wait (${why}): ${startGate()}`);
     else if (started.has(key) || used >= capacityOf(m)) decided.set(t.id, `would wait (${why}): ${m.name} is busy`);
     else { decided.set(t.id, `WOULD START ${m.name} (${why})`); room.set(key, used + 1); started.add(key); }
   }
@@ -1740,6 +1845,9 @@ async function pass() {
       reconcile();
       await limits();
       updateLimitGate();
+      await checkLoad();
+      gateWaits();
+      heavyWaits();
       alert();
       await stalls();
       await closeBrowsers();

@@ -188,7 +188,7 @@ export function setBoardSettings(space, patch) {
   if (!b) return Promise.reject(new Error("The board's engine has not answered yet."));
   const machineLevel = {};
   const boardLevel = {};
-  for (const [k, v] of Object.entries(patch)) (k === "autopilot" || k === "openTabs" || k === "maxRuns" ? machineLevel : boardLevel)[k] = v;
+  for (const [k, v] of Object.entries(patch)) (["autopilot", "openTabs", "maxRuns", "heavySlots", "niceness"].includes(k) ? machineLevel : boardLevel)[k] = v;
   const out = [];
   if (Object.keys(machineLevel).length) out.push(request(b.machine, { op: "set-settings", settings: machineLevel }));
   if (Object.keys(boardLevel).length) out.push(request(b.machine, { op: "board-set", folder: b.folder, settings: boardLevel }));
@@ -615,7 +615,8 @@ async function engineSource() {
   if (!bundled) {
     const text = await fs.readFile(`${appHome()}/mods/${MOD}/engine/engine.mjs`, "utf8");
     const readme = await fs.readFile(`${appHome()}/mods/${MOD}/engine/README.md`, "utf8").catch(() => "");
-    bundled = { text, readme, version: `${PROTOCOL}-${hash(text + readme)}` };
+    const heavy = await fs.readFile(`${appHome()}/mods/${MOD}/engine/board-heavy.sh`, "utf8").catch(() => "");
+    bundled = { text, readme, heavy, version: `${PROTOCOL}-${hash(text + readme + heavy)}` };
   }
   return bundled;
 }
@@ -658,14 +659,15 @@ export async function ensureEngine(machine) {
 </dict></plist>
 `;
     // The engine's files, then its service: a running one is replaced (bootout, bootstrap).
-    const w = await exec("sh", ["-c", `set -e; mkdir -p "$1/engine" "$(dirname "$4")"
+    const w = await exec("sh", ["-c", `set -e; mkdir -p "$1/engine" "$1/bin" "$(dirname "$4")"
 printf "%s" "$2" > "$1/engine/.engine.mjs.tmp" && mv -f "$1/engine/.engine.mjs.tmp" "$1/engine/engine.mjs"
+printf "%s" "$9" > "$1/bin/.board-heavy.tmp" && chmod 755 "$1/bin/.board-heavy.tmp" && mv -f "$1/bin/.board-heavy.tmp" "$1/bin/board-heavy"
 printf "%s" "$5" > "$4.tmp" && mv -f "$4.tmp" "$4"
 printf "%s" "$8" > "$1/.README.md.tmp" && mv -f "$1/.README.md.tmp" "$1/README.md"
 printf "%s" "$3" > "$1/engine/VERSION"
 launchctl bootout "gui/$6/$7" 2>/dev/null || true
 for i in 1 2 3 4 5 6 7 8 9 10; do launchctl bootstrap "gui/$6" "$4" 2>/dev/null && exit 0; sleep 0.5; done
-launchctl bootstrap "gui/$6" "$4"`, "sh", home, src.text, src.version, plistPath, plist, uidNum, LABEL, src.readme], { on: machine });
+launchctl bootstrap "gui/$6" "$4"`, "sh", home, src.text, src.version, plistPath, plist, uidNum, LABEL, src.readme, src.heavy], { on: machine });
     if (w.code !== 0) throw new Error(`Could not install the board engine on ${machine ?? "this Mac"}: ${(w.stderr || w.stdout).trim()}`);
     return have ? "updated" : "installed";
   } finally {

@@ -192,3 +192,44 @@ test("only an engine without any teams file gets the starter team", () => {
   assert.ok(s.members.every((m) => m.program === "claude" && m.model === "" && m.capacity === 1));
   assert.notEqual(s, STARTER_TEAM); // a copy: STARTER_TEAM never changes
 });
+
+import { parseLoad, loadVerdict, heavyState, niced } from "./engine.mjs";
+import fsx from "node:fs";
+import osx from "node:os";
+import pathx from "node:path";
+
+const SYSCTL = "1\ntotal = 6144.00M  used = 4465.31M  free = 1678.69M  (encrypted)\n{ 10.62 12.82 13.29 }\n12\n";
+const LIMITS = { gatePressure: 2, gateSwap: 0.85, gateLoad: 1.5 };
+
+test("parseLoad reads sysctl's numbers", () => {
+  assert.deepEqual(parseLoad(SYSCTL), { pressure: 1, ncpu: 12, swapTotal: 6144, swapUsed: 4465.31, load1: 10.62 });
+});
+
+test("the load gate: calm, memory, swap, load", () => {
+  assert.equal(loadVerdict(parseLoad(SYSCTL), LIMITS), null);
+  assert.equal(loadVerdict({ ...parseLoad(SYSCTL), pressure: 2 }, LIMITS).why, "memory");
+  assert.equal(loadVerdict({ ...parseLoad(SYSCTL), pressure: 4 }, LIMITS).detail, "memory pressure critical");
+  assert.equal(loadVerdict({ ...parseLoad(SYSCTL), swapUsed: 5600 }, LIMITS).why, "swap");
+  assert.equal(loadVerdict({ ...parseLoad(SYSCTL), swapUsed: 5600 }, { ...LIMITS, gateSwap: 0 }), null);
+  assert.equal(loadVerdict({ ...parseLoad(SYSCTL), load1: 19 }, LIMITS).why, "load");
+  assert.equal(loadVerdict({ ...parseLoad(SYSCTL), load1: 17.9 }, LIMITS), null);
+});
+
+test("heavyState: live holders and waiters only", () => {
+  const dir = fsx.mkdtempSync(pathx.join(osx.tmpdir(), "heavy-"));
+  fsx.symlinkSync("111:ka:r1:5", pathx.join(dir, "slot-1"));
+  fsx.symlinkSync("999:kdead:r2:5", pathx.join(dir, "slot-2"));
+  fsx.writeFileSync(pathx.join(dir, "wait-222"), "222:kb:r3:6\n");
+  fsx.writeFileSync(pathx.join(dir, "wait-998"), "998:kgone:r4:6\n");
+  const live = new Set([111, 222]);
+  const st = heavyState(dir, (pid) => live.has(pid));
+  assert.deepEqual(st.held.map((h) => h.task), ["ka"]);
+  assert.deepEqual(st.waiting.map((w) => w.task), ["kb"]);
+  fsx.rmSync(dir, { recursive: true, force: true });
+});
+
+test("niced wraps argv, and 0 means off", () => {
+  assert.deepEqual(niced(["zsh", "-lic", "x"], 10), ["/usr/bin/nice", "-n", "10", "zsh", "-lic", "x"]);
+  assert.deepEqual(niced(["zsh"], 0), ["zsh"]);
+  assert.deepEqual(niced(["zsh"], 40), ["/usr/bin/nice", "-n", "19", "zsh"]);
+});
