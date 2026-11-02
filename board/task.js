@@ -3,7 +3,7 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState } from "gpui-base";
 import { theme, spaces, props, closeOverlay, run, exec } from "herdr";
-import { COLUMNS, tasks, task, team, member, column, activeRun, liveStatus, runStatus, runLimit, updateTask, newTask, removeTask, removeTaskDir, where, launch, restart, endRun, tidy, goTo, paneOf, isLive, leftOver, nudge, reply, place, taskDir, knownNow, programs, ago, uid, attachments, copyIn, attach, detach, filesDir, pickFiles, openFile, removeWorktree, ctxOfTask, boardOfSpace, fileOf, homeNow } from "./state.js";
+import { unblockInTab, COLUMNS, tasks, task, team, member, column, activeRun, liveStatus, runStatus, runLimit, updateTask, newTask, removeTask, removeTaskDir, where, launch, restart, endRun, tidy, goTo, paneOf, isLive, leftOver, nudge, reply, place, taskDir, knownNow, programs, ago, uid, attachments, copyIn, attach, detach, filesDir, pickFiles, openFile, removeWorktree, ctxOfTask, boardOfSpace, fileOf, homeNow } from "./state.js";
 import { button, tiny, label, field, fileChip, memberChip, programIcon, statusGlyph, STATUS_WORDS, section, chips, titleRow, closeButton, colorOf, dot } from "./ui.js";
 import { MarkdownEditor } from "./mdeditor.js";
 import { TextBlocks } from "./textblock.js";
@@ -258,7 +258,9 @@ export class TaskView extends View {
     const hist = [...(t.history ?? [])].reverse();
     const blockedNow = status === "blocked" || (active && t.attention);
     const canStart = Boolean(m) && !active;
+    const needsYou = Boolean(t.attention) || status === "blocked";
     const actions = h_flex().flex_wrap().gap(6).items_center()
+      .when(needsYou, (el) => el.child(button("unblock", "Unblock in tab ↗", (_e, cx) => this.run(cx, async () => { await unblockInTab(task(t.id)); this.close(); }), { primary: true, disabled: this.busy })))
       .when(canStart, (el) => el.child(button("start", `▶ Start ${m.name}`, (_e, cx) => this.run(cx, () => launch(task(t.id))), { primary: true, disabled: this.busy })))
       .when(Boolean(active), (el) => el
         .child(button("restart", "↻ Restart", (_e, cx) => this.run(cx, () => restart(task(t.id))), { disabled: this.busy }))

@@ -3,7 +3,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Popover } from "gpui-base";
 import { theme, props, openOverlay, closeOverlay, run, focused, notify } from "herdr";
-import { COLUMNS, MOD, tasks, tasksOf, team, member, column, activeRun, liveStatus, runLimit, updateTask, launch, boardSettings, setBoardSettings, setBoardTeam, boardOfSpace, teamsOf, stateOf, outdated, lead, poll, ensureEngine, served, request, programTable, uid, programs, knownNow, ago, spaces, busyOn } from "./state.js";
+import { unblockInTab, COLUMNS, MOD, tasks, tasksOf, team, member, column, activeRun, liveStatus, runLimit, updateTask, launch, boardSettings, setBoardSettings, setBoardTeam, boardOfSpace, teamsOf, stateOf, outdated, lead, poll, ensureEngine, served, request, programTable, uid, programs, knownNow, ago, spaces, busyOn } from "./state.js";
 import { button, tiny, memberChip, programIcon, statusGlyph, STATUS_WORDS, colorOf, dot } from "./ui.js";
 import { noteOf, plain, clip } from "./note.js";
 import { limitLine } from "./limit.js";
@@ -67,8 +67,20 @@ export class Board extends View {
     return b ? { machine: b.machine, board: b.id } : null;
   }
 
+  // A session in a tab, with the task's whole story, to work out what it needs.
+  unblock(t, cx) {
+    delete this.errors[t.id];
+    this.press = null; this.drag = null; this.pointer = null;
+    cx.spawn(async (cx) => {
+      try { await unblockInTab(t); }
+      catch (e) { this.errors[t.id] = String(e?.message ?? e); }
+      cx.notify();
+    });
+  }
+
   start(t, cx) {
     delete this.errors[t.id];
+    this.press = null; this.drag = null; this.pointer = null;
     cx.spawn(async (cx) => {
       const had = this.handle.is_focused();
       try { await launch(t); }
@@ -148,6 +160,7 @@ export class Board extends View {
         .child(div().child("·"))
         .child(div().child(ago(t.updated ?? t.created)))
         .child(div().flex_1())
+        .when(Boolean(t.attention) && !ghost, (el) => el.child(tiny(`unblock-${t.id}`, "Unblock ↗", (_e, cx) => this.unblock(t, cx))))
         .when(canStart && !ghost, (el) => el.child(tiny(`start-${t.id}`, "▶ Start", (_e, cx) => this.start(t, cx)))));
   }
 

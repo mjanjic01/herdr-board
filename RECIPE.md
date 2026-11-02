@@ -18,14 +18,14 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
   - If the task has its own worktree: "⎇ <branch>".
   - A wait line: "Waits for Bo, who works on "<title>"", or "Waits for the usage limit to reset at 10pm".
   - If the task needs the person: a red note and a red border.
-  - "N runs · 2h". If the task has an assignee and no run, "▶ Start" follows.
+  - "N runs · 2h". If the task needs the person, "Unblock ↗" follows. If the task has an assignee and no run, "▶ Start" follows.
 - **Task dialog:**
   - The status and the column chip, then the member, the program and the model.
   - The description, rendered as markdown, with Copy and Source.
   - Attachments.
   - Runs: the task folder, and the worktree branch and path. Each run shows its member, start time, status and result, with Peek, "Open as tab" and Stop.
   - History, newest first.
-  - The actions: Start, Restart, Nudge, Assign ▾, the column ▾, Edit, Close finished runs, and Delete.
+  - The actions: "Unblock in tab ↗" (only when the task needs the person), Start, Restart, Nudge, Assign ▾, the column ▾, Edit, Close finished runs, and Delete.
 - **Settings menu ("Autopilot on ▾"):**
   - The switches Autopilot, Pick up, Worktrees and Tabs, each with its own hint line.
   - "Run limit: 20" with − and +.
@@ -66,6 +66,7 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
   - "X stopped without writing a result" after 30 s idle.
   - Neither appears while the agent still runs a command, such as a long test.
 - **Loop check:** if the same two members hand a task back and forth 6 times in a row, the task stops with a note. Start continues it.
+- **Unblock in tab:** writes `UNBLOCK.md` into the task folder on its machine (why the task needs the person, the waiting question, the description, the team, every run and hand-off, the history, the notes files, how to read the last agent's terminal, and the inbox requests for this task: reply, start, note, update, move). Then it opens a tab in the task's space running `claude --add-dir <task folder> -- "<read UNBLOCK.md…>"`. The session summarises, asks, and acts through the inbox only after the person agrees.
 - **Run limit:** at most 20 finished runs per task (− and + in the menu). Stopped or failed runs do not count.
 - **Cleanup:**
   - After a result, the engine closes the Chrome inside that agent's own process tree.
@@ -109,6 +110,8 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
 - **Keep large data out of shared state.** Every `shared()` read copies the whole value, and every write redraws every mod. The engine states (hundreds of KB) stay in each view's memory, and shared state carries only versions.
 - **Put `--` after `--add-dir`.** Claude's `--add-dir` takes several folders. Without `--` after it, the first message counts as a folder, and the agent starts empty.
 - **Never let `hc` start herdr-core from inside a Claude Code session.** The core would keep that session's variables (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, its session id and messaging socket), and every new terminal would inherit them. Claude then stops saving transcripts. The engine unsets these variables before every start, but restart a leaked core through launchd.
+- **Start programs on another machine through the login shell.** Herdr's `tab.new` and `knownAgents({ on })` use a plain `sh` there, whose PATH is only `/usr/bin:/bin:/usr/sbin:/sbin`, so `claude` from Homebrew or nvm is "not found". Wrap the argv: `sh -c 's=${SHELL:-/bin/zsh}; "$s" -lic '"'"'"$@"'"'"' "$s" "$@"; exec "$s" -li' sh claude …`.
+- **Buttons on a card must stop their press.** A card starts a drag on mouse down. A button that opens a tab never lets the card see the release, so the card would follow the pointer later. Every button stops `on_mouse_down`.
 - **Expect a trust question in every new worktree.** Each one is a new folder for Claude, so Claude asks whether to trust it. Trusting a parent folder does not cover it. The card shows the wait.
 - **Handle Keychain values in the engine.** The Keychain opens only inside the login session. herdr-core started over ssh cannot read it, so the engine (launchd, inside the session) hands values over through its socket.
 - **Expect a restart to wait for a login.** A user launchd agent starts after a login. Without automatic login, a restarted Mac runs no engine until someone logs in.
@@ -124,4 +127,5 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
 - A member that writes `blocked` shows "needs you" on its card, and the question appears in the task dialog.
 - With Pick up on and capacity 1, a member takes one To do task. The next one waits until the first finishes.
 - A secret set in the Teams window shows "•••• set". It reaches the agent as an environment variable, and it appears in no file under the board home.
+- On a task that needs the person, "Unblock ↗" writes `UNBLOCK.md` in its task folder and opens a tab where Claude summarises the block, also for a space on another machine. Back on the board, no card follows the pointer.
 - With the Herdr app closed, a hand-off between two members still starts the next one.

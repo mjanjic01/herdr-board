@@ -18,6 +18,9 @@ export function button(id, text, action, opts = {}) {
     .text_color(primary ? t.solid_foreground : danger ? t.blocked : t.foreground)
     .text_size(opts.size ?? 12).font_medium()
     .when(opts.disabled, (el) => el.opacity(0.45))
+    // The press stays on the button: a card around it must not take it as the
+    // start of a drag (an action that opens a tab never lets the card see the release).
+    .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
     .when(!opts.disabled, (el) => el.cursor_pointer().hover((s) => s.opacity(0.85)).on_click((e, cx) => { cx.stop_propagation(); action(e, cx); }))
     .when(Boolean(opts.icon), (el) => el.child(opts.icon))
     .child(text);

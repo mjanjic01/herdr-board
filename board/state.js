@@ -314,6 +314,83 @@ export async function secretSet(machine, account, value) {
   if (r.code !== 0) throw new Error((r.stderr || "The engine did not answer.").trim().replace(/^herdr board: /, ""));
 }
 
+// ---- unblocking a task with an agent session ----
+
+// Writes UNBLOCK.md into the task's folder on its machine (why it needs the
+// person, the waiting question, the description, the team, the whole history,
+// its notes, how to act on the board) and opens a tab in the task's space with
+// an agent that reads it first and works it out with the person.
+export async function unblockInTab(t) {
+  const machine = t.machine ?? null;
+  const space = spacesNow().find((s) => s.id === t.space) ?? null;
+  if (!space) throw new Error("Open the task's space first: the session starts there.");
+  const dir = taskDir(t);
+  if (!dir) throw new Error("The task has no folder yet.");
+  const home = homeNow(machine) ?? (await homeOn(machine));
+  const ctx = ctxOfTask(t);
+  const mates = team(ctx);
+  const nameOf = (id) => member(id, ctx)?.name ?? id ?? "nobody";
+  const runs = t.runs ?? [];
+  const r = activeRun(t);
+  const last = runs[runs.length - 1] ?? null;
+  const live = r && isLive(r);
+  const when = (ms) => (ms ? new Date(ms).toISOString().slice(0, 16).replace("T", " ") : "?");
+  const b = boardById(machine, t.board);
+  let files = [];
+  try {
+    const ls = await exec("sh", ["-c", 'cd "$1" 2>/dev/null && ls -1p | grep -v / | grep -v -E "^(result\\.|brief\\.md$|UNBLOCK\\.md$|setup\\.log$)"', "sh", dir], { on: machine });
+    files = ls.stdout.split("\n").map((x) => x.trim()).filter(Boolean);
+  } catch {}
+  const L = [];
+  L.push(`# Unblock: ${t.title}`, "");
+  L.push("The person opened this session from the Herdr board, because this task needs them. Help them understand what is going on and decide. Do not change the board or the code until they agree; then act through the board as shown below.", "");
+  L.push("## Why it needs the person", "");
+  L.push(t.attention ? `Board note: ${t.attention}` : "There is no board note.");
+  if (r?.blocked) L.push("", `The agent's question (${nameOf(r.member)}, waiting in its terminal):`, "", "> " + String(r.blocked).split("\n").join("\n> "));
+  else if (r?.stall) L.push("", `Stall: ${r.stall}`);
+  if (r?.limit) L.push("", `Usage limit: until ${r.limit.until ?? "unknown"}.`);
+  L.push("");
+  L.push("## The task", "");
+  L.push(`- Id: ${t.id}, column: ${t.column}, assignee: ${nameOf(t.assignee)}`);
+  L.push(`- Board folder (the repository): ${b?.folder ?? t.folder ?? "?"}${machine ? ` on ${machine}` : ""}`);
+  if (t.worktree?.path) L.push(`- Its own worktree: ${t.worktree.path} (branch ${t.worktree.branch})`);
+  L.push(`- Task folder (briefs, notes, results): ${dir}`, "");
+  L.push((t.description || "(no description)").trim(), "");
+  L.push("## The team", "");
+  for (const m of mates) L.push(`- ${m.name}, ${m.role}${(m.handoffs ?? []).length ? ` (hands off to ${(m.handoffs ?? []).map(nameOf).join(", ")})` : ""}`);
+  L.push("");
+  L.push("## Runs", "");
+  for (const x of runs) L.push(`- ${when(x.started)} ${nameOf(x.member)} in terminal ${local(x.terminal) ?? "?"}: ${x.result ? `${x.result.action}${x.result.to ? ` → ${nameOf(x.result.to)}` : ""}` : x.ended ? `ended (${x.exit ?? "?"})` : "running"}${x.blocked ? " [asked the person]" : ""}`);
+  L.push("");
+  L.push("## History (oldest first; hand-off summaries say what each member did and wants)", "");
+  for (const h of t.history ?? []) L.push(`- ${when(h.at)} ${String(h.text).replace(/\n+/g, " ")}`);
+  L.push("");
+  L.push("## Read these too", "");
+  if (files.length) for (const f of files) L.push(`- ${dir}/${f}`);
+  else L.push("- (no notes in the task folder)");
+  L.push(`- The last brief the agents got: ${dir}/brief.md`);
+  if (last?.terminal) L.push(`- ${live ? "The waiting" : "The last"} agent's screen and history: \`hc read ${local(last.terminal)} --lines 300\`${live ? " (it is still running)" : ""}`);
+  L.push("");
+  L.push("## Acting on the board (only after the person agrees)", "");
+  L.push(`Write one JSON request per action into ${home}/inbox/: write a dot-named temp file there, then rename it to \`<unique name>.json\`. The answer appears in inbox/done/ or inbox/failed/ within seconds. The full guide is ${home}/README.md.`, "");
+  if (live) L.push(`- Answer the waiting agent: \`{"op": "reply", "id": "${t.id}", "text": "<the person's answer>"}\` (it types the answer into its terminal and clears the note).`);
+  L.push(`- Let a member go on (also after a loop or a stopped run): \`{"op": "start", "id": "${t.id}", "member": "<name>"}\`. Add \`"restart": true\` to end a run that is still going.`);
+  L.push(`- Leave a decision for the next member: \`{"op": "note", "id": "${t.id}", "text": "<decision>"}\`, or change the description: \`{"op": "update", "id": "${t.id}", "description": "<markdown>"}\`.`);
+  L.push(`- Move the task: \`{"op": "move", "id": "${t.id}", "column": "backlog|todo|doing|review|done"}\`.`);
+  L.push("", "Start by summarising in a few lines what happened and what exactly is needed, then ask the person.");
+  const w = await exec("sh", ["-c", 'printf "%s" "$2" > "$1/.UNBLOCK.md.tmp" && mv -f "$1/.UNBLOCK.md.tmp" "$1/UNBLOCK.md"', "sh", dir, L.join("\n") + "\n"], { on: machine });
+  if (w.code !== 0) throw new Error(`Could not write UNBLOCK.md: ${(w.stderr || "").trim()}`);
+  const first = `Read ${dir}/UNBLOCK.md and the files it lists, then help me unblock the board task "${t.title}". Summarise what happened and what is needed, and ask me before you change anything.`;
+  const claude = ["claude", "--add-dir", dir, "--", first];
+  // On another machine, tab.new starts the program from a plain sh whose PATH
+  // lacks the login shell's (Homebrew, nvm): run it in the login shell, which
+  // stays open after it, as Herdr does here.
+  const argv = machine
+    ? ["sh", "-c", 's=${SHELL:-/bin/zsh}; "$s" -lic \'"$@"\' "$s" "$@"; exec "$s" -li', "sh", ...claude]
+    : claude;
+  run("tab.new", { name: `Unblock: ${t.title}`.slice(0, 40), space: space.id, argv });
+}
+
 // ---- live state of runs ----
 
 const liveOf = (r) => (r?.terminal ? stateOf(machineOf(r.terminal))?.live?.[local(r.terminal)] ?? null : null);

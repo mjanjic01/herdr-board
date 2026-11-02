@@ -39,6 +39,7 @@ Read this before you install it:
 - Add a task with "+ Task", give it a member, and drag it into In progress. That member starts. Members hand the task on until one reports it done, and it lands in Review.
 - **Pick up** (in the menu) lets members with room take To do tasks by themselves.
 - **Tasks at once** (in Teams) sets how many tasks a member works on at the same time. It counts per board.
+- **Unblock in tab ↗** (on a card that needs you, and in its task dialog) opens a tab with Claude in the task's space. It writes `UNBLOCK.md` into the task folder first: why the task needs you, the waiting question, the description, the team, every run and hand-off, and the notes to read. The session talks it through with you and acts on the board only after you agree.
 - **Board setup and notes…** sets a command for each new worktree, for example `npm ci`. It also holds notes for every agent's brief, and your standing answers to questions that agents ask often.
 
 `board/README.md` describes how it is built, and `RECIPE.md` describes how to build it from scratch.
