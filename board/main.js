@@ -3,6 +3,7 @@
 //   (no view)       the board itself (a window from mod.open, or a tab pane)
 //   view: "task"    one task: new (no id), or its details and actions
 //   view: "team"    the team editor
+//   view: "machine" a machine's last hour, gate, slots and settings
 import { View, div } from "gpui-kit";
 import { props } from "herdr";
 import { Board } from "./board.js";
@@ -10,8 +11,9 @@ import { within, loadStates, statesReady } from "./state.js";
 import { TaskView } from "./task.js";
 import { TeamsView } from "./team.js";
 import { EnvView } from "./env.js";
+import { MachineView } from "./machine.js";
 
-const VIEWS = { task: TaskView, team: TeamsView, teams: TeamsView, env: EnvView };
+const VIEWS = { task: TaskView, team: TeamsView, teams: TeamsView, env: EnvView, machine: MachineView };
 
 export default class Main extends View {
   init(p, cx) {

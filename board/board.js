@@ -239,7 +239,10 @@ export class Board extends View {
         .child(div().text_size(12).text_color(tm.muted).child("Board setup and notes…")))
       .child(h_flex().id("teams-open").items_center().px(10).py(6).rounded(6).cursor_pointer().hover((st) => st.bg(tm.hover))
         .on_click((_e, cx) => { this.menu = false; cx.notify(); this.openTeams(); })
-        .child(div().text_size(12).text_color(tm.muted).child("Teams…")));
+        .child(div().text_size(12).text_color(tm.muted).child("Teams…")))
+      .child(h_flex().id("machine-open").items_center().px(10).py(6).rounded(6).cursor_pointer().hover((st) => st.bg(tm.hover))
+        .on_click((_e, cx) => { this.menu = false; cx.notify(); openOverlay({ mod: MOD, kind: "dialog", width: 860, height: 700, props: { view: "machine", machine: b?.machine ?? this.space()?.machine ?? null } }); })
+        .child(div().text_size(12).text_color(tm.muted).child("Machine…")));
     return Popover.new("board-settings").anchor("top_right").open(Boolean(this.menu))
       .on_open_change((open, cx) => { this.menu = open; cx.notify(); })
       .trigger(trigger).content(content);

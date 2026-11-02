@@ -506,7 +506,7 @@ export const DEFAULT_ENV_NOTES = [
   "- The shell is zsh: quote globs (`--include='*.tsx'`) and avoid a bare `=word`.",
   "- Before you write your result, close every Chrome you opened: its pages through your browser tools, then any Chrome still running with your user-data-dir. The board also closes them after your result.",
   "- Never open links, files or artifacts in a desktop app on this machine (Safari, Preview, `open <url>`). Use only your own Chrome through the browser tools.",
-  "- Run any browser, e2e or Playwright suite through `\"$BOARD_HEAVY\"` (the board's `board-heavy`) with `--workers=$BOARD_WORKERS`, for example `\"$BOARD_HEAVY\" npm run test:acceptance -- --workers=$BOARD_WORKERS`. It waits for this machine's browser slot, so suites never run side by side, and runs at low priority.",
+  "- Run any browser, e2e or Playwright suite through `\"$BOARD_HEAVY\"` (the board's `board-heavy`) with `--workers=$BOARD_WORKERS` (the board's \"Browsers per test run\": how many browsers one run may open at once), for example `\"$BOARD_HEAVY\" npm run test:acceptance -- --workers=$BOARD_WORKERS`. It waits for this machine's browser slot, so suites never run side by side, and runs at low priority.",
 ].join("\n");
 const DEFAULT_BOARD = { pickup: false, worktrees: true, setup: "", envNotes: DEFAULT_ENV_NOTES, standing: "", workers: 4 };
 
@@ -551,6 +551,8 @@ function load() {
   events = st.events ?? [];
   applied = st.applied ?? [];
   limitGate = st.limitGate ?? null;
+  // A closed load gate stays closed across a restart, until two calm checks.
+  loadGate = st.loadGate ? { ...st.loadGate, calm: 0 } : null;
   for (const t of tasks) if (!t.board && t.folder) { t.board = ensureBoard(t.folder).id; dirty = true; }
 }
 
@@ -959,17 +961,55 @@ export function parseLoad(text) {
 }
 // Why the machine is too busy for new starts, or null.
 export function loadVerdict(n, s) {
-  if (n.pressure != null && n.pressure >= (s.gatePressure ?? 2)) return { why: "memory", detail: n.pressure >= 4 ? "memory pressure critical" : "memory pressure warning" };
+  // 0 turns a rule off.
+  if ((s.gatePressure ?? 2) > 0 && n.pressure != null && n.pressure >= (s.gatePressure ?? 2)) return { why: "memory", detail: n.pressure >= 4 ? "memory pressure critical" : "memory pressure warning" };
   if (s.gateSwap > 0 && n.swapTotal > 0 && n.swapUsed / n.swapTotal > s.gateSwap) return { why: "swap", detail: `swap ${Math.round((100 * n.swapUsed) / n.swapTotal)}% used` };
-  if (n.ncpu > 0 && n.load1 > (s.gateLoad ?? 1.5) * n.ncpu) return { why: "load", detail: `load ${n.load1.toFixed(1)} on ${n.ncpu} cores` };
+  if ((s.gateLoad ?? 1.5) > 0 && n.ncpu > 0 && n.load1 > (s.gateLoad ?? 1.5) * n.ncpu) return { why: "load", detail: `load ${n.load1.toFixed(1)} on ${n.ncpu} cores` };
   return null;
+}
+// ---- the machine's last hour (the Machine window) ----
+//
+// One sample per load check (about every 10 s): load per core (×100), memory
+// pressure level, swap used %, the gate closed or not, busy browser slots. The
+// last hour lives in machine.json, written apart from state.json so a sample
+// never wakes the board's poller; the Machine window reads it while open.
+const SAMPLES = 360;
+let samples = null; // { t: [], load: [], pressure: [], swap: [], gate: [], busy: [] }
+export function pushSample(buf, x, max = SAMPLES) {
+  const b = buf ?? { t: [], load: [], pressure: [], swap: [], gate: [], busy: [] };
+  for (const k of Object.keys(b)) { b[k].push(x[k] ?? null); if (b[k].length > max) b[k].splice(0, b[k].length - max); }
+  return b;
+}
+function loadSamples() {
+  if (samples) return samples;
+  const old = readJson(P("machine.json"), null)?.samples;
+  const fresh = old && Array.isArray(old.t) && old.t.length && Date.now() - old.t[old.t.length - 1] < 3600000;
+  return (samples = fresh ? old : null);
+}
+function writeMachine(n) {
+  const { held, waiting } = heavyState();
+  const title = (id) => task(id)?.title ?? null;
+  const out = {
+    at: Date.now(), machine: MACHINE ?? os.hostname(), ncpu: n.ncpu,
+    now: { load1: n.load1, pressure: n.pressure, swapUsed: n.swapUsed, swapTotal: n.swapTotal },
+    settings: { niceness: settings.niceness, heavySlots: settings.heavySlots, gateLoad: settings.gateLoad, gatePressure: settings.gatePressure, gateSwap: settings.gateSwap, maxRuns: settings.maxRuns },
+    gate: loadGate, limitGate,
+    slots: held.map((h) => ({ slot: h.slot, task: h.task, title: title(h.task), run: h.run, since: h.start ? h.start * (h.start < 1e12 ? 1000 : 1) : null })),
+    waiting: [
+      ...waiting.map((w) => ({ task: w.task, title: title(w.task), why: "slot" })),
+      ...tasks.filter((t) => t.wait && GATE_WAIT.test(t.wait)).map((t) => ({ task: t.id, title: t.title, why: "gate", text: t.wait })),
+    ],
+    samples,
+  };
+  try { writeAtomic(P("machine.json"), JSON.stringify(out)); } catch {}
 }
 async function checkLoad() {
   if (Date.now() - lastLoadCheck < 10000) return;
   lastLoadCheck = Date.now();
   const r = await run("sysctl", ["-n", "kern.memorystatus_vm_pressure_level", "vm.swapusage", "vm.loadavg", "hw.ncpu"], { timeout: 5000 });
   if (r.code !== 0 && !r.stdout) return;
-  const v = loadVerdict(parseLoad(r.stdout), settings);
+  const n = parseLoad(r.stdout);
+  const v = loadVerdict(n, settings);
   if (v) {
     if (!loadGate || loadGate.why !== v.why || loadGate.calm) { if (!loadGate) log("load gate on:", v.detail); loadGate = { why: v.why, detail: v.detail, since: loadGate?.since ?? Date.now(), calm: 0 }; dirty = true; }
     else if (loadGate.detail !== v.detail) { loadGate = { ...loadGate, detail: v.detail }; dirty = true; }
@@ -978,6 +1018,15 @@ async function checkLoad() {
     if (calm >= 2) { log("load gate off"); loadGate = null; } else loadGate = { ...loadGate, calm };
     dirty = true;
   }
+  samples = pushSample(loadSamples(), {
+    t: Date.now(),
+    load: n.ncpu > 0 && n.load1 != null ? Math.round((100 * n.load1) / n.ncpu) : null,
+    pressure: n.pressure,
+    swap: n.swapTotal > 0 ? Math.round((100 * n.swapUsed) / n.swapTotal) : 0,
+    gate: loadGate ? 1 : 0,
+    busy: heavyState().held.length,
+  });
+  writeMachine(n);
 }
 export const loadWait = () => (loadGate ? `Waits: ${MACHINE ?? os.hostname()} is busy (${loadGate.why})` : null);
 // Why the engine starts nothing new right now (usage limit, then load), or null.
@@ -1841,11 +1890,11 @@ async function pass() {
       again = false;
       await look();
       await drain();
+      await checkLoad(); // before results: a hand-off start must see a closed gate
       await results();
       reconcile();
       await limits();
       updateLimitGate();
-      await checkLoad();
       gateWaits();
       heavyWaits();
       alert();

@@ -233,3 +233,21 @@ test("niced wraps argv, and 0 means off", () => {
   assert.deepEqual(niced(["zsh"], 0), ["zsh"]);
   assert.deepEqual(niced(["zsh"], 40), ["/usr/bin/nice", "-n", "19", "zsh"]);
 });
+
+import { pushSample } from "./engine.mjs";
+
+test("a gate rule set to 0 is off", () => {
+  const busy = { pressure: 4, ncpu: 4, load1: 40, swapUsed: 90, swapTotal: 100 };
+  assert.equal(loadVerdict(busy, { gatePressure: 0, gateLoad: 0, gateSwap: 0 }), null);
+  assert.equal(loadVerdict(busy, { gatePressure: 4, gateLoad: 0, gateSwap: 0 }).why, "memory");
+  assert.equal(loadVerdict({ ...busy, pressure: 1 }, { gatePressure: 2, gateLoad: 1.5, gateSwap: 0 }).why, "load");
+  assert.equal(loadVerdict({ ...busy, pressure: 1, load1: 1 }, { gatePressure: 2, gateLoad: 1.5, gateSwap: 0.85 }).why, "swap");
+});
+
+test("the machine samples keep the last hour", () => {
+  let b = null;
+  for (let i = 0; i < 400; i++) b = pushSample(b, { t: i, load: i, pressure: 1, swap: 0, gate: 0, busy: 0 });
+  assert.equal(b.t.length, 360);
+  assert.equal(b.t[0], 40);
+  assert.equal(b.load.at(-1), 399);
+});

@@ -164,7 +164,9 @@ ways:
   (the machine setting `heavySlots`, default 1), runs the suite at low
   priority, and frees the slot when it ends. While it waits, the task's card
   says "Waits for a browser slot (held by …)". `$BOARD_WORKERS` is the board's
-  `workers` setting (default 4); the same number is in `PLAYWRIGHT_WORKERS`,
+  "Browsers per test run" (the `workers` setting, default 4): how many browsers
+  one run may open at once, not how many agents work at once (that is each
+  member's "Tasks at once"). The same number is in `PLAYWRIGHT_WORKERS`,
   `PW_WORKERS` and `E2E_WORKERS`.
 - **The load gate.** While the kernel reports memory pressure (warning or
   critical) or the 1-minute load is over 1.5 × the cores, the engine starts
@@ -173,4 +175,10 @@ ways:
   "Waits: <machine> is busy (memory)", and the board's header says "busy". It
   opens after two calm checks in a row. The machine settings `gatePressure`
   (2), `gateLoad` (1.5) and `gateSwap` (0: off, because macOS keeps swap once
-  it grew) set the limits.
+  it grew) set the limits; 0 turns a rule off.
+
+The person sees and sets all this in the board's **Machine…** window: the last
+hour of load per core, memory pressure and swap (with the gate's limits and the
+times it was closed), the gate and the browser slots right now, and the machine
+settings above plus the run limit. The engine writes those numbers to
+`machine.json` here about every 10 seconds, apart from `state.json`.

@@ -51,8 +51,10 @@ Read this before you install it:
 Browser and e2e suites can overload a machine. The board guards it in three ways:
 
 - **Low priority.** Every agent and everything it starts runs under `nice -n 10`, so the machine keeps answering ssh and the network.
-- **Browser slots.** Agents run suites through `"$BOARD_HEAVY"` (the board's `board-heavy`), which waits for one of the machine's slots (default 1) and runs the suite at low priority. `$BOARD_WORKERS` (default 4 per board) caps its workers. Set both in "Board setup and notes…".
+- **Browser slots.** Agents run suites through `"$BOARD_HEAVY"` (the board's `board-heavy`), which waits for one of the machine's slots (default 1) and runs the suite at low priority. Each board's "Browsers per test run" (`$BOARD_WORKERS`, default 4) caps how many browsers one run opens; it is not how many agents work at once (that is each member's "Tasks at once").
 - **The load gate.** Under memory pressure, or a load over 1.5 × the cores, the board starts nothing new on that machine until it calms down. Running work goes on, and the header says "busy".
+
+**Machine…** in the board's menu shows one machine's last hour (load per core, memory pressure and swap, with the gate's limits and the times it was closed), the gate and the browser slots right now, and its settings: agent priority, browser slots, the load, memory and swap gates, and the run limit. "Browsers per test run" stays per board in "Board setup and notes…".
 
 ## License
 

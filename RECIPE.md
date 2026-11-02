@@ -30,7 +30,7 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
 - **Settings menu ("Autopilot on ▾"):**
   - The switches Autopilot, Pick up, Worktrees and Tabs, each with its own hint line.
   - "Run limit: 20" with − and +.
-  - A TEAM list with a check next to this board's team, then "Board setup and notes…" and "Teams…".
+  - A TEAM list with a check next to this board's team, then "Board setup and notes…", "Teams…" and "Machine…".
 - **Teams window:**
   - A machine picker, the team chips with member counts, "+ New team", and Rename, Duplicate, "Copy a member in…", "Copy to machine…" and Delete. Delete is turned off while a board uses the team.
   - The member list, and the member form:
@@ -43,7 +43,11 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
     - A markdown brief editor whose source and preview scroll together.
     - The hand-off chips.
     - The colour dots.
-- **Board setup and notes dialog:** the setup command, the environment notes and the standing answers.
+- **Board setup and notes dialog:** the setup command, the environment notes, the standing answers, and "Browsers per test run" (the board's `workers`, with the hint that it is not how many agents work at once).
+- **Machine window (860×700):** a machine picker, then:
+  - "Last hour": three rows of 120 columns (30 s each, the max of the samples in it), drawn with divs: load per core with a red line at the gate's factor, memory pressure as green/amber/red bands (the theme's ansi2, ansi3 and blocked), and swap used with a line at the swap gate when set. Columns where the gate was closed are shaded red. The current value sits next to each row label, and -60m, -30m and now are under the rows.
+  - "Now": "Gate open" or "Gate closed: load 22.9 on 11 cores since 13:47", each browser slot with the task holding it (a click opens the task) or "free", and the tasks waiting for the gate or a slot.
+  - "Settings for this machine": agent priority (0 to 19), browser slots, run limit, load gate (× cores, 0 off), memory pressure gate (Off, Warning, Critical) and swap gate (%, 0 off), saved with `set-settings`.
 
 ## How it behaves
 
@@ -72,6 +76,7 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
   - Every agent starts under `/usr/bin/nice -n 10` (machine setting `niceness`), so all it starts inherits the priority.
   - `board-heavy <command…>` (installed as `<home>/bin/board-heavy`, `$BOARD_HEAVY`) takes a machine-wide slot: a symlink `<home>/heavy/slot-N` whose target is `<pid>:<task>:<run>:<start>`, created atomically; a slot whose pid is gone is taken over. While it waits it leaves `<home>/heavy/wait-<pid>`, and the card says "Waits for a browser slot (held by "<task>")". It runs the command at `nice -n 10` in the background and waits for it, so a signal frees the slot at once; the exit code is the command's. Slots: machine setting `heavySlots` (1).
   - Every agent gets `BOARD_HEAVY`, `BOARD_HOME`, `BOARD_HEAVY_SLOTS`, `BOARD_TASK`, `BOARD_RUN`, and the board's `workers` (4) as `BOARD_WORKERS`, `PLAYWRIGHT_WORKERS`, `PW_WORKERS` and `E2E_WORKERS`.
+  - **Machine samples:** each load check also records a sample (load per core ×100, pressure level, swap %, gate closed, busy slots) in a ring buffer of 360 (one hour). The engine writes it with the gate, the slots and the waiting tasks to `<home>/machine.json`, apart from `state.json`, so a sample never wakes the board's poller. The Machine window reads that file every 10 s while it is open.
   - **Load gate:** at most every 10 s the engine reads `sysctl -n kern.memorystatus_vm_pressure_level vm.swapusage vm.loadavg hw.ncpu`. Pressure ≥ `gatePressure` (2, warning), or a 1-minute load over `gateLoad` × cores (1.5), closes the gate; `gateSwap` (0) is off by default. It opens after 2 calm checks. While closed, hand-offs, pick-ups and waiting starts wait ("Waits: <machine> is busy (memory)"); running work and a Start by the person are not stopped. `loadGate` is in `state.json`, and the header shows "busy (…): no new starts".
 - **Run limit:** at most 20 finished runs per task (− and + in the menu). Stopped or failed runs do not count.
 - **Cleanup:**
@@ -94,7 +99,7 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
   - **Engines:** `ensureEngine()` installs the engine and keeps it current.
   - **Secrets:** `secretSet()` and `secretStatus()`.
 - **`board/board.js`:** the board view, cards, drag and drop, and the header with its `Popover` settings menu. `props().menu` opens the menu at start. One copy leads, through `board/screen-leader.json`: it polls the engines every 2 s and checks their version once a minute.
-- **`board/task.js`, `board/team.js`, `board/env.js`:** the task dialog, the Teams window and the board setup dialog.
+- **`board/task.js`, `board/team.js`, `board/env.js`, `board/machine.js`:** the task dialog, the Teams window, the board setup dialog and the Machine window.
 - **`board/mdeditor.js` and `board/mdsync.js`:** the markdown editor whose source and preview scroll together. `board/textblock.js`, `board/note.js`, `board/limit.js` and `board/ui.js` hold the shared pieces.
 - **`board/engine/engine.mjs`:** one Node file with no dependencies, the engine.
   - **Where it runs:** the launchd user agent `dev.herdr.board` (KeepAlive) runs it on each Mac. Its home is `~/.config/herdr-app/board` on the Mac with the app and `~/.herdr/board` on others. It is the only writer of `tasks.json`, `boards.json`, `teams.json` and `settings.json`.
@@ -127,6 +132,9 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
 - **Tabs mode gives runs unnamed tabs.** Herdr shows the tab's number.
 - **Engine updates need an open board.** An engine update reaches a machine only while a board view is open somewhere.
 
+- **Check the load before anything can start, and keep the gate across restarts.** The pass reads the load before it handles results (a result can start the next member at once), and a restarted engine restores a closed gate from `state.json`. Without both, a restart on a busy machine started new agents.
+- **0 turns a gate rule off.** `gateLoad: 0` or `gatePressure: 0` would otherwise close the gate for good, because every value is at least 0.
+
 ## Done when
 
 - `herdr-app check mods/board` passes, and `node --test board/engine/engine.test.mjs board/*.test.js` passes.
@@ -137,5 +145,6 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
 - With Pick up on and capacity 1, a member takes one To do task. The next one waits until the first finishes.
 - A secret set in the Teams window shows "•••• set". It reaches the agent as an environment variable, and it appears in no file under the board home.
 - On a task that needs the person, "Unblock ↗" writes `UNBLOCK.md` in its task folder and opens a tab where Claude summarises the block, also for a space on another machine. Back on the board, no card follows the pointer.
+- "Machine…" in the board's menu shows the last hour filling in from the right, the gate and slot state, and the machine's settings; saving changes `settings.json` on that machine.
 - `sh board/engine/board-heavy.test.sh` passes: the exit code passes through, a stale slot is taken over, a second job waits with a marker, TERM frees the slot. An agent's shell shows `ps -o ni` 10, and `$BOARD_WORKERS` equals the board's workers.
 - With the Herdr app closed, a hand-off between two members still starts the next one.

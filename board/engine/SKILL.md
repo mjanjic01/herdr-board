@@ -22,7 +22,7 @@ files in `~/.herdr/board/`.
 
 To run a browser, e2e or Playwright suite on this machine, run it through
 `"$BOARD_HEAVY"` (the board's `board-heavy`, in `~/.herdr/board/bin/`) with
-`--workers=$BOARD_WORKERS`. It waits for the machine's browser slot, so suites
+`--workers=$BOARD_WORKERS` (the board's "Browsers per test run"). It waits for the machine's browser slot, so suites
 never run side by side.
 
 You can be a member of the board team: your first message then says that the
