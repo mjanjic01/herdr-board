@@ -16,10 +16,42 @@ const when = (ms) => {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 
+// Pull requests a task's agents opened: GitHub PR links in its description,
+// history and results, with each PR's title and state from `gh` (cached a minute).
+const PR_LINK = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g;
+export function prLinks(t) {
+  const text = [t?.description ?? "", ...(t?.history ?? []).map((h) => h.text ?? ""),
+    ...(t?.runs ?? []).flatMap((r) => [r.result?.summary ?? "", r.blocked ?? ""])].join("\n");
+  return [...new Set(text.match(PR_LINK) ?? [])];
+}
+const prInfo = {}; // url -> { number, title, state, isDraft, at } or { error, at }
+async function loadPrs(urls) {
+  let changed = false;
+  for (const url of urls) {
+    if (prInfo[url] && Date.now() - prInfo[url].at < 60000) continue;
+    try {
+      const r = await exec("gh", ["pr", "view", url, "--json", "number,title,state,isDraft"]);
+      prInfo[url] = r.code === 0 ? { ...JSON.parse(r.stdout), at: Date.now() } : { error: (r.stderr || "gh failed").trim().split("\n")[0], at: Date.now() };
+    } catch (e) { prInfo[url] = { error: String(e?.message ?? e), at: Date.now() }; }
+    changed = true;
+  }
+  return changed;
+}
+
 export class TaskView extends View {
   init(_props, cx) {
     const p = props() ?? {};
     this.id = p.id ?? null;
+    // The PRs' details: first from a timer (a spawn straight from a dialog's init
+    // never finishes), then every minute.
+    const prs = (cx) => cx.spawn(async (cx) => {
+      if (this.prsLoading) return;
+      this.prsLoading = true;
+      try { if (await loadPrs(prLinks(task(this.id)))) cx.notify(); } catch {}
+      this.prsLoading = false;
+    });
+    cx.timer.after(60, prs);
+    cx.timer.every(60000, prs);
     this.editing = !this.id;
     this.busy = false;
     this.picking = false; // the file picker is open
@@ -247,6 +279,22 @@ export class TaskView extends View {
       .when(!reach && !r.background && Boolean(r.tab) && Boolean(r.ended), (el) => el.child(tiny(`go-${r.id}`, "Open tab", () => { this.close(); goTo(r); })));
   }
 
+  prList(t) {
+    const tm = theme();
+    const look = { OPEN: ["Open", tm.working], MERGED: ["Merged", tm.accent], CLOSED: ["Closed", tm.dim] };
+    return v_flex().gap(2).children(prLinks(t).map((url, i) => {
+      const p = prInfo[url];
+      const num = url.split("/").pop();
+      const [word, color] = p?.isDraft && p.state === "OPEN" ? ["Draft", tm.muted] : look[p?.state] ?? [p?.error ? "?" : "…", tm.dim];
+      return h_flex().id(`pr-${i}`).items_center().gap(8).px(6).py(4).rounded(6).cursor_pointer()
+        .hover((s) => s.bg(tm.hover))
+        .on_click(() => { exec("open", [url]).catch(() => {}); })
+        .child(div().flex_none().text_size(12).font_medium().text_color(tm.accent).child(`#${num}`))
+        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(tm.foreground).child(p?.title ?? url.replace("https://github.com/", "")))
+        .child(div().flex_none().text_size(11).text_color(color).child(word));
+    }));
+  }
+
   details(t) {
     const tm = theme();
     const m = member(t.assignee);
@@ -306,6 +354,7 @@ export class TaskView extends View {
       .child(v_flex().id("task-scroll").flex_1().min_h(0).overflow_y_scrollbar().pr(4)
         .child(section("Description", this.text.descTools(t)))
         .child(this.text.descBox(t))
+        .when(prLinks(t).length > 0, (el) => el.child(section("Pull requests")).child(this.prList(t)))
         .when(attachments(t).length > 0, (el) => el
           .child(section("Attachments"))
           .child(h_flex().flex_wrap().gap(6).items_start().children(attachments(t).map((a, i) =>

@@ -22,6 +22,7 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
 - **Task dialog:**
   - The status and the column chip, then the member, the program and the model.
   - The description, rendered as markdown, with Copy and Source.
+  - Pull requests: each GitHub PR linked in the description, the history or the results, as "#<number> <title>" with Draft, Open, Merged or Closed, from `gh pr view --json number,title,state,isDraft` (refreshed every minute). A click opens it.
   - Attachments.
   - Runs: the task folder, and the worktree branch and path. Each run shows its member, start time, status and result, with Peek, "Open as tab" and Stop.
   - History, newest first.
