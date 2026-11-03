@@ -2,7 +2,7 @@
 
 # Kelpie
 
-Kelpie is a software factory for coding agents in the [Herdr](https://herdr.dev) app. It is a kanban board where teams of agents plan, build, review and test your work. Each repository or worktree folder gets a board with five columns: Backlog, To do, In progress, Review, Done. A team of agents works the tasks. Each member has a name, a role, a brief and a program: Claude Code or Codex. The members hand each task on to the next. If a card says it needs you, you step in.
+Kelpie is a software factory for coding agents in the [Herdr](https://herdr.dev) app. It is a kanban board where teams of agents plan, build, review and test your work. Each repository or worktree folder gets a board with five columns: Backlog, To do, In progress, Review, Done. A team of agents works the tasks. Each member has a name, a role, a brief and a program: any coding agent that Herdr can start. The members hand each task on to the next. If a card says it needs you, you step in.
 
 ![Board](screenshots/board.png)
 
@@ -25,14 +25,14 @@ Kelpie is a software factory for coding agents in the [Herdr](https://herdr.dev)
    - as a tab in a space: `herdr-app do tab.new --name Board --space <space id> --mod board --props '{"space":"<space id>"}'`.
 3. The first time a board opens, it installs a small engine on this Mac, and on every Mac that Herdr is connected to. The engine starts the agents. A new engine comes with a "Starter" team: a Planner, a Builder and a Reviewer. Edit them, or make your own teams in "Teams…" in the board's menu.
 
-You need macOS, Node, git, and `claude` or `codex` on each Mac that runs agents.
+You need macOS, Node, git and a coding agent's command-line program on each Mac that runs agents.
 
 ## What it installs and does
 
 Read this before you install it:
 
 - **A background service on each Mac.** It installs a launchd user agent, `dev.herdr.board`, which runs `mods/board/engine/engine.mjs` with Node. The service keeps the board working while Herdr is closed. Its files are in `~/.config/herdr-app/board` on this Mac and in `~/.herdr/board` on other Macs.
-- **Agents and commands, here and on other machines.** It starts `claude` or `codex` agents on every Mac that Herdr is connected to, through herdr-core. It also runs `git`, `hc`, `security`, `launchctl` and `ps` there.
+- **Agents and commands, here and on other machines.** It starts the members' agents on every Mac that Herdr is connected to, through herdr-core. It also runs `git`, `hc`, `security`, `launchctl` and `ps` there.
 - **Git worktrees and branches.** Each task gets its own worktree, under `~/.herdr/worktrees/<repo>/`, on a branch named `board/…`. It never deletes a worktree that has changes.
 - **Secrets in the macOS Keychain.** A member's secrets are kept in the Keychain of its machine, under the service `herdr-board`. Agents get them as environment variables. The values never go into the board's files.
 - **Chrome cleanup.** After an agent writes its result, the engine closes the Chrome that agent started, and only that one. Idle agent sessions are closed once their task has sat in Done for 30 minutes (a Machine setting; 0 = never). Tasks in other columns keep them, so you can still ask an agent something.
@@ -52,7 +52,9 @@ Read this before you install it:
 
 `mods/board/README.md` describes how it is built, and `RECIPE.md` describes how to build it from scratch.
 
-## Claude Code and Codex
+## Agent programs
+
+A member can run any program in Herdr's programs table that has a `run` command (`programs.json`). The board adds `--model` when the member names a model, and passes the first message as the last argument. Claude Code and Codex are the programs that are tested, and they get the extra flags below.
 
 A member runs `claude` or `codex`. Both get the task folder as a second writable folder (`--add-dir`). Codex members also run with `--sandbox workspace-write --ask-for-approval never` and network on inside the sandbox, because Codex otherwise starts read-only and refuses the task folder. A member's own "Extra arguments" that set a sandbox or approval policy win.
 
