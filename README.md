@@ -33,6 +33,7 @@ Read this before you install it:
 - **Secrets in the macOS Keychain.** A member's secrets are kept in the Keychain of its machine, under the service `herdr-board`. Agents get them as environment variables. The values never go into the board's files.
 - **Chrome cleanup.** After an agent writes its result, the engine closes the Chrome that agent started, and only that one. Idle agent sessions are closed once their task has sat in Done for 30 minutes (a Machine setting; 0 = never). Tasks in other columns keep them, so you can still ask an agent something.
 - **Lower priority and a limit on heavy jobs.** Agents run under `nice -n 10`. Browser and e2e suites run through the bundled `board-heavy` script, one at a time per machine by default. While a machine is short of memory or far over its cores, the board starts no new agents there.
+- **The `herdr-board` skill for any agent.** It installs the skill in `~/.agents/skills/herdr-board/` on each Mac, where Codex and other agents look, and links Claude's `~/.claude/skills/herdr-board` to it. Agents outside the board use it to add or check tasks.
 - **No network calls of its own.** The board itself only talks to your machines. The agents it starts use their own network as usual.
 
 ## Using it
@@ -46,6 +47,12 @@ Read this before you install it:
 - **Board setup and notes…** sets a command for each new worktree, for example `npm ci`. It also holds notes for every agent's brief, and your standing answers to questions that agents ask often.
 
 `board/README.md` describes how it is built, and `RECIPE.md` describes how to build it from scratch.
+
+## Claude Code and Codex
+
+A member runs `claude` or `codex`. Both get the task folder as a second writable folder (`--add-dir`). Codex members also run with `--sandbox workspace-write --ask-for-approval never` and network on inside the sandbox, because Codex otherwise starts read-only and refuses the task folder. A member's own "Extra arguments" that set a sandbox or approval policy win.
+
+Codex asks once per repository whether to trust it; the answer covers all later worktrees of that repository. For Codex agents to use MCP tools (a browser, CI) without stopping, give those servers `default_tools_approval_mode = "approve"` in `~/.codex/config.toml`.
 
 ## Heavy jobs
 

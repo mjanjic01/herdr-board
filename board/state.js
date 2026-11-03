@@ -644,7 +644,8 @@ async function engineSource() {
     const text = await fs.readFile(`${appHome()}/mods/${MOD}/engine/engine.mjs`, "utf8");
     const readme = await fs.readFile(`${appHome()}/mods/${MOD}/engine/README.md`, "utf8").catch(() => "");
     const heavy = await fs.readFile(`${appHome()}/mods/${MOD}/engine/board-heavy.sh`, "utf8").catch(() => "");
-    bundled = { text, readme, heavy, version: `${PROTOCOL}-${hash(text + readme + heavy)}` };
+    const skill = await fs.readFile(`${appHome()}/mods/${MOD}/engine/SKILL.md`, "utf8").catch(() => "");
+    bundled = { text, readme, heavy, skill, version: `${PROTOCOL}-${hash(text + readme + heavy + skill)}` };
   }
   return bundled;
 }
@@ -693,9 +694,21 @@ printf "%s" "$9" > "$1/bin/.board-heavy.tmp" && chmod 755 "$1/bin/.board-heavy.t
 printf "%s" "$5" > "$4.tmp" && mv -f "$4.tmp" "$4"
 printf "%s" "$8" > "$1/.README.md.tmp" && mv -f "$1/.README.md.tmp" "$1/README.md"
 printf "%s" "$3" > "$1/engine/VERSION"
+# The herdr-board skill, for any agent: ~/.agents/skills (Codex and others read it);
+# Claude's ~/.claude/skills/herdr-board links there. An old copy holding only the
+# skill file becomes the link; anything else there is left alone.
+if [ -n "\${10}" ]; then
+  S="$HOME/.agents/skills/herdr-board"; mkdir -p "$S"
+  printf "%s" "\${10}" > "$S/.SKILL.md.tmp" && mv -f "$S/.SKILL.md.tmp" "$S/SKILL.md"
+  C="$HOME/.claude/skills/herdr-board"; mkdir -p "$HOME/.claude/skills"
+  if [ -d "$C" ] && [ ! -L "$C" ] && [ "$(ls -A "$C")" = "SKILL.md" ]; then rm -rf "$C"; fi
+  [ -e "$C" ] && [ ! -L "$C" ] || ln -sfn "$S" "$C"
+fi
 launchctl bootout "gui/$6/$7" 2>/dev/null || true
 for i in 1 2 3 4 5 6 7 8 9 10; do launchctl bootstrap "gui/$6" "$4" 2>/dev/null && exit 0; sleep 0.5; done
-launchctl bootstrap "gui/$6" "$4"`, "sh", home, src.text, src.version, plistPath, plist, uidNum, LABEL, src.readme, src.heavy], { on: machine });
+launchctl bootstrap "gui/$6" "$4"`, "sh", home, src.text, src.version, plistPath, plist, uidNum, LABEL, src.readme, src.heavy,
+      // The skill names this machine's board home (here: ~/.config/herdr-app/board).
+      src.skill.replaceAll("~/.herdr/board", home.startsWith(`${userHome}/`) ? `~${home.slice(userHome.length)}` : home)], { on: machine });
     if (w.code !== 0) throw new Error(`Could not install the board engine on ${machine ?? "this Mac"}: ${(w.stderr || w.stdout).trim()}`);
     return have ? "updated" : "installed";
   } finally {

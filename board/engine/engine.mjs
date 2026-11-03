@@ -207,6 +207,8 @@ async function secretSet(account, value) {
   if (!value) throw new Error("The value is empty.");
   if (/[\r\n]/.test(value)) throw new Error("A secret must be one line.");
   const r = await security(["-i"], securityLine(checkAccount(account), value));
+  if (/-60008|-25308|Unable to obtain authorization|User interaction is not allowed/i.test(r.err))
+    throw new Error(`This Mac's screen is locked, and macOS stores new Keychain entries only while someone is signed in at it. Unlock it (at the machine or over Screen Sharing), then set the secret again. Stored secrets keep working while it is locked.`);
   if (r.code !== 0 || /returned -?\d+|error/i.test(r.err)) throw new Error(`The Keychain refused it: ${r.err.trim().split("\n").pop()}`);
 }
 async function secretDelete(account) {
@@ -721,11 +723,25 @@ const kickoff = (m, dir, result) =>
 
 // ---- starting a member ----
 
+// Codex runs a board agent read-only unless told otherwise, and then refuses
+// the task folder and every write. A board agent works alone: it may write in
+// its worktree and the task folder, uses the network (npm, gh), and never stops
+// to ask (a command the sandbox blocks fails, and the agent says so). A member's
+// own Extra arguments that set a sandbox or approval policy win.
+export function codexDefaults(m, base = []) {
+  const codex = m?.program === "codex" || /(^|\/)codex$/.test(base[0] ?? "");
+  if (!codex) return [];
+  const own = (m.args ?? []).join(" ");
+  if (/(^|\s)(-s|--sandbox|-a|--ask-for-approval|--full-auto|--dangerously-bypass-approvals-and-sandbox)(\s|=|$)/.test(own)) return [];
+  return ["--sandbox", "workspace-write", "--ask-for-approval", "never", "-c", "sandbox_workspace_write.network_access=true"];
+}
 async function argvFor(m, dir) {
   const base = runOf(m.program);
   if (!(await installed(base[0]))) throw new Error(`${settings.programs?.[m.program]?.name ?? m.program} is not installed on ${MACHINE ?? "this machine"}. Install it here, or give ${m.name} another program in Teams.`);
-  const claude = m.program === "claude" || /(^|\/)claude$/.test(base[0]);
-  return [...base, ...(m.model ? ["--model", m.model] : []), ...(dir && claude ? ["--add-dir", dir] : []), ...(m.args ?? [])];
+  // Claude and Codex both get the task folder as a second writable folder, so
+  // reading the brief and writing notes and the result there asks nothing.
+  const addDir = ["claude", "codex"].includes(m.program) || /(^|\/)(claude|codex)$/.test(base[0]);
+  return [...base, ...(m.model ? ["--model", m.model] : []), ...codexDefaults(m, base), ...(dir && addDir ? ["--add-dir", dir] : []), ...(m.args ?? [])];
 }
 
 // queued: a start by the engine itself (a pickup or a waiting hand-off).

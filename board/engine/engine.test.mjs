@@ -293,3 +293,11 @@ test("wouldCycle finds loops through dependencies, also indirect ones", () => {
   assert.equal(wouldCycle("c", ["x"], all), false);  // a dependency that is gone ends the walk
   assert.equal(wouldCycle("a", ["a"], all), true);
 });
+
+import { codexDefaults } from "./engine.mjs";
+test("codex members run with a writable sandbox unless their own args say otherwise", () => {
+  assert.deepEqual(codexDefaults({ program: "codex" }), ["--sandbox", "workspace-write", "--ask-for-approval", "never", "-c", "sandbox_workspace_write.network_access=true"]);
+  assert.deepEqual(codexDefaults({ program: "codex", args: ["--sandbox", "read-only"] }), []);
+  assert.deepEqual(codexDefaults({ program: "codex", args: ["--full-auto"] }), []);
+  assert.deepEqual(codexDefaults({ program: "claude" }), []);
+});
