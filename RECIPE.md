@@ -2,7 +2,7 @@
 
 Kelpie is a software factory for coding agents in Herdr: a kanban board where teams of agents plan, build, review and test the work. Each checkout (a repository or a worktree folder) has its own board with five columns. A team of agents works the tasks. Each member has a name, a role, a brief and a program: Claude Code or Codex. A member writes a result file to hand a task to the next member, or to report done or blocked. A small engine on each Mac runs the agents, so the board keeps working while the Herdr app is closed.
 
-![Board](preview.png)
+![Kelpie](preview.png)
 
 ## What you see
 
