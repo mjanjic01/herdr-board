@@ -504,9 +504,9 @@ export function loopOf(t) {
 // standing answers.
 export const DEFAULT_ENV_NOTES = [
   "- Other agents work on this machine at the same time. Never run broad `pkill` or `killall`: stop only processes you started, by their PID.",
-  "- Use your own dev-server port and your own Chrome DevTools profile (a user-data-dir inside your worktree), never shared ones.",
+  "- Use your own dev-server port. For a browser, use `agent-browser` (the board gives each run its own) or your own browser tools, never a Chrome that another run uses.",
   "- The shell is zsh: quote globs (`--include='*.tsx'`) and avoid a bare `=word`.",
-  "- Before you write your result, close every Chrome you opened: its pages through your browser tools, then any Chrome still running with your user-data-dir. The board also closes them after your result.",
+  "- Before you write your result, run `agent-browser close` if you used it, and close the pages that you opened through your browser tools. The board also closes your browsers after your result.",
   "- Never open links, files or artifacts in a desktop app on this machine (Safari, Preview, `open <url>`). Use only your own Chrome through the browser tools.",
   "- Run any browser, e2e or Playwright suite through `\"$BOARD_HEAVY\"` (the board's `board-heavy`) with `--workers=$BOARD_WORKERS` (the board's \"Browsers per test run\": how many browsers one run may open at once), for example `\"$BOARD_HEAVY\" npm run test:acceptance -- --workers=$BOARD_WORKERS`. It waits for this machine's browser slot, so suites never run side by side, and runs at low priority.",
 ].join("\n");

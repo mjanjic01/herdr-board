@@ -1,6 +1,8 @@
-# Board for Herdr
+<p align="center"><img src="kelpie.png" width="160" alt="Kelpie"></p>
 
-A kanban board for coding agents in the [Herdr](https://herdr.dev) app. Each repository or worktree folder gets a board with five columns: Backlog, To do, In progress, Review, Done. A team of agents works the tasks. Each member has a name, a role, a brief and a program: Claude Code or Codex. The members hand each task on to the next. If a card says it needs you, you step in.
+# Kelpie
+
+Kelpie is a software factory for coding agents in the [Herdr](https://herdr.dev) app. It is a kanban board where teams of agents plan, build, review and test your work. Each repository or worktree folder gets a board with five columns: Backlog, To do, In progress, Review, Done. A team of agents works the tasks. Each member has a name, a role, a brief and a program: Claude Code or Codex. The members hand each task on to the next. If a card says it needs you, you step in.
 
 ![Board](preview.png)
 
@@ -69,3 +71,7 @@ Browser and e2e suites can overload a machine. The board guards it in three ways
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+## The name
+
+Kelpie is named after the Australian working dog that herds a large flock on its own with few commands. The breed is named after the kelpie of Scottish folklore, a spirit that changes its shape. Inside Herdr, the panel is still called Board.
