@@ -15,7 +15,7 @@ A kanban board for coding agents in the [Herdr](https://herdr.dev) app. Each rep
 
 ## Install
 
-1. Copy the `board/` folder into `~/.config/herdr-app/mods/`.
+1. Copy the `mods/board/` folder into `~/.config/herdr-app/mods/`.
 2. Open the board:
    - as a window: `herdr-app do mod.open --name board`, or
    - as a tab in a space: `herdr-app do tab.new --name Board --space <space id> --mod board --props '{"space":"<space id>"}'`.
@@ -27,7 +27,7 @@ You need macOS, Node, git, and `claude` or `codex` on each Mac that runs agents.
 
 Read this before you install it:
 
-- **A background service on each Mac.** It installs a launchd user agent, `dev.herdr.board`, which runs `board/engine/engine.mjs` with Node. The service keeps the board working while Herdr is closed. Its files are in `~/.config/herdr-app/board` on this Mac and in `~/.herdr/board` on other Macs.
+- **A background service on each Mac.** It installs a launchd user agent, `dev.herdr.board`, which runs `mods/board/engine/engine.mjs` with Node. The service keeps the board working while Herdr is closed. Its files are in `~/.config/herdr-app/board` on this Mac and in `~/.herdr/board` on other Macs.
 - **Agents and commands, here and on other machines.** It starts `claude` or `codex` agents on every Mac that Herdr is connected to, through herdr-core. It also runs `git`, `hc`, `security`, `launchctl` and `ps` there.
 - **Git worktrees and branches.** Each task gets its own worktree, under `~/.herdr/worktrees/<repo>/`, on a branch named `board/…`. It never deletes a worktree that has changes.
 - **Secrets in the macOS Keychain.** A member's secrets are kept in the Keychain of its machine, under the service `herdr-board`. Agents get them as environment variables. The values never go into the board's files.
@@ -46,7 +46,7 @@ Read this before you install it:
 - **Pull requests** in a task's dialog lists every GitHub PR its agents linked (in the description, the hand-offs or the results), with its title and whether it is a draft, open, merged or closed. A click opens it. It needs `gh` signed in on the Mac with the app.
 - **Board setup and notes…** sets a command for each new worktree, for example `npm ci`. It also holds notes for every agent's brief, and your standing answers to questions that agents ask often.
 
-`board/README.md` describes how it is built, and `RECIPE.md` describes how to build it from scratch.
+`mods/board/README.md` describes how it is built, and `RECIPE.md` describes how to build it from scratch.
 
 ## Claude Code and Codex
 

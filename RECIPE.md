@@ -95,24 +95,24 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
 
 ## Built from
 
-- **`board/main.js`:** picks the view from `props().view`: none for the board, `task`, `teams`, `env`. It builds the view after the first state load. That load starts from `cx.timer.after(30, …)`. Every render runs inside `within()`, which reads each live list once per render.
-- **`board/state.js`:** the screen's client.
+- **`mods/board/main.js`:** picks the view from `props().view`: none for the board, `task`, `teams`, `env`. It builds the view after the first state load. That load starts from `cx.timer.after(30, …)`. Every render runs inside `within()`, which reads each live list once per render.
+- **`mods/board/state.js`:** the screen's client.
   - **Reading:** `loadStates()` reads each engine's `state.json`. Remote states come through a copy in `board/cache/<machine>.json`. Shared state holds only `boardx.seqs`, a version string per machine.
   - **Writing:** `request()` writes `<home>/inbox/.<name>.tmp` and renames it to `<name>.json`. An overlay in `boardx.pending` shows the change until the engine lists the request in `applied`.
   - **Ids:** `qual()` and `local()` map ids between the app and an engine (`<machine>/t7` and `t7`).
   - **Engines:** `ensureEngine()` installs the engine and keeps it current.
   - **Secrets:** `secretSet()` and `secretStatus()`.
-- **`board/board.js`:** the board view, cards, drag and drop, and the header with its `Popover` settings menu. `props().menu` opens the menu at start. One copy leads, through `board/screen-leader.json`: it polls the engines every 2 s and checks their version once a minute.
-- **`board/task.js`, `board/team.js`, `board/env.js`, `board/machine.js`:** the task dialog, the Teams window, the board setup dialog and the Machine window.
-- **`board/mdeditor.js` and `board/mdsync.js`:** the markdown editor whose source and preview scroll together. `board/textblock.js`, `board/note.js`, `board/limit.js` and `board/ui.js` hold the shared pieces.
-- **`board/engine/engine.mjs`:** one Node file with no dependencies, the engine.
+- **`mods/board/board.js`:** the board view, cards, drag and drop, and the header with its `Popover` settings menu. `props().menu` opens the menu at start. One copy leads, through `board/screen-leader.json`: it polls the engines every 2 s and checks their version once a minute.
+- **`mods/board/task.js`, `mods/board/team.js`, `mods/board/env.js`, `mods/board/machine.js`:** the task dialog, the Teams window, the board setup dialog and the Machine window.
+- **`mods/board/mdeditor.js` and `mods/board/mdsync.js`:** the markdown editor whose source and preview scroll together. `mods/board/textblock.js`, `mods/board/note.js`, `mods/board/limit.js` and `mods/board/ui.js` hold the shared pieces.
+- **`mods/board/engine/engine.mjs`:** one Node file with no dependencies, the engine.
   - **Where it runs:** the launchd user agent `dev.herdr.board` (KeepAlive) runs it on each Mac. Its home is `~/.config/herdr-app/board` on the Mac with the app and `~/.herdr/board` on others. It is the only writer of `tasks.json`, `boards.json`, `teams.json` and `settings.json`.
   - **One pass every 2 s, and at once after an inbox change.** A pass reads the world, applies the requests and reads the results. Then it reconciles runs and checks limits, alerts and stalls. Last, it closes browsers, runs setup commands, checks branches, starts waiting work, closes idle sessions and saves.
   - **Its view of the world:** spaces and folders from `hc connect` → `doc.get {name: "herdr-app"}`, and terminals from `terminal.list`.
   - **Starting agents:** `hc run --bg --no-parent --cwd <worktree> --label board.task=… -- <login shell> -lic 'unset <leaked Claude vars>; <secret exports>"$@"; …' claude --model … --add-dir <task folder> -- "<first message>"`.
   - **Inbox ops:** create, note, assign, move, update, remove, start, stop, nudge, reply, tidy, remove-worktree, board-set, board-remove, team-create, team-rename, team-duplicate, team-delete, team-set-members, team-copy-member, team-import, set-settings, import.
   - **Secrets socket:** `<home>/secrets.sock`, mode 0600. It answers get (a one-time token from a start, valid 2 minutes), status, set (the value on stdin) and delete.
-- **`board/engine/README.md` and `board/engine/SKILL.md`:** the guide for agents outside the board, installed next to each engine, and the Claude Code skill `herdr-board`.
+- **`mods/board/engine/README.md` and `mods/board/engine/SKILL.md`:** the guide for agents outside the board, installed next to each engine, and the Claude Code skill `herdr-board`.
 - **herdr functions:** `spaces`, `panes`, `machines`, `shared`, `setShared`, `exec`, `readTextFile`, `appHome`, `knownAgents`, `notify`, `run`, `focused`, `props`, `openOverlay`, `closeOverlay`, `theme`, `settings`, `window`, `playSound`.
 - **Commands:** `tab.new`, `tab.select`, `tab.rename`, `tab.close`, `space.select`, `pane.focus`, `terminal.peek`.
 - **Programs:** `hc`, `node`, `git`, `security`, `launchctl`, `ps`, `sh` and your login shell, `claude` or `codex`.
@@ -144,7 +144,7 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
 ## Done when
 
 - A task that depends on one in To do refuses Start with "Waits for "<title>" (To do)", queues when moved into In progress, and starts by itself (with Autopilot on and an open space) once the dependency reaches Review.
-- `herdr-app check mods/board` passes, and `node --test board/engine/engine.test.mjs board/*.test.js` passes.
+- `herdr-app check mods/board` passes, and `node --test mods/board/engine/engine.test.mjs mods/board/*.test.js` passes.
 - Opening the board (`herdr-app do mod.open --name board`) installs `dev.herdr.board` (`launchctl list | grep herdr.board`). The engine log shows `engine <version> protocol 2`.
 - A fresh engine has the team "Starter" (Ana Planner, Bo Builder, Cy Reviewer).
 - A task dropped into In progress starts Ana, and `brief.md` appears in its task folder. Ana's `handoff` result starts Bo in the same worktree, on branch `board/…`.
@@ -153,5 +153,5 @@ A kanban board for coding agents in Herdr. Each checkout (a repository or a work
 - A secret set in the Teams window shows "•••• set". It reaches the agent as an environment variable, and it appears in no file under the board home.
 - On a task that needs the person, "Unblock ↗" writes `UNBLOCK.md` in its task folder and opens a tab where Claude summarises the block, also for a space on another machine. Back on the board, no card follows the pointer.
 - "Machine…" in the board's menu shows the last hour filling in from the right, the gate and slot state, and the machine's settings; saving changes `settings.json` on that machine.
-- `sh board/engine/board-heavy.test.sh` passes: the exit code passes through, a stale slot is taken over, a second job waits with a marker, TERM frees the slot. An agent's shell shows `ps -o ni` 10, and `$BOARD_WORKERS` equals the board's workers.
+- `sh mods/board/engine/board-heavy.test.sh` passes: the exit code passes through, a stale slot is taken over, a second job waits with a marker, TERM frees the slot. An agent's shell shows `ps -o ni` 10, and `$BOARD_WORKERS` equals the board's workers.
 - With the Herdr app closed, a hand-off between two members still starts the next one.
