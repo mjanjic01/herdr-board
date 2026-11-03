@@ -741,7 +741,12 @@ async function argvFor(m, dir) {
   // Claude and Codex both get the task folder as a second writable folder, so
   // reading the brief and writing notes and the result there asks nothing.
   const addDir = ["claude", "codex"].includes(m.program) || /(^|\/)(claude|codex)$/.test(base[0]);
-  return [...base, ...(m.model ? ["--model", m.model] : []), ...codexDefaults(m, base), ...(dir && addDir ? ["--add-dir", dir] : []), ...(m.args ?? [])];
+  // A Codex member in the board's sandbox also writes board-heavy's slots
+  // (<home>/heavy): without it, a browser suite through "$BOARD_HEAVY" cannot start.
+  const cdx = codexDefaults(m, base);
+  const heavy = path.join(HOME, "heavy");
+  if (cdx.length) fs.mkdirSync(heavy, { recursive: true });
+  return [...base, ...(m.model ? ["--model", m.model] : []), ...cdx, ...(cdx.length ? ["--add-dir", heavy] : []), ...(dir && addDir ? ["--add-dir", dir] : []), ...(m.args ?? [])];
 }
 
 // queued: a start by the engine itself (a pickup or a waiting hand-off).
@@ -846,7 +851,8 @@ async function launch(t, memberId, { queued = false } = {}) {
   // run's ids, and the board's worker cap (E2E_WORKERS too: some e2e configs read it).
   const workers = Math.max(1, Math.floor(Number(boardSet(t).workers) || 4));
   const env = { BOARD_HOME: HOME, BOARD_HEAVY: path.join(HOME, "bin", "board-heavy"), BOARD_HEAVY_SLOTS: String(Math.max(1, Math.floor(Number(settings.heavySlots) || 1))),
-    BOARD_TASK: t.id, BOARD_RUN: runId, BOARD_WORKERS: String(workers), PLAYWRIGHT_WORKERS: String(workers), PW_WORKERS: String(workers), E2E_WORKERS: String(workers) };
+    BOARD_TASK: t.id, BOARD_RUN: runId, BOARD_WORKERS: String(workers), PLAYWRIGHT_WORKERS: String(workers), PW_WORKERS: String(workers), E2E_WORKERS: String(workers),
+    ...browserEnv(t.id, runId) };
   const envPre = FISH
     ? `${Object.entries(env).map(([k, v]) => `set -gx ${k} ${q1(v)};`).join(" ")} set -gx PATH ${q1(path.join(HOME, "bin"))} $PATH; `
     : `export ${Object.entries(env).map(([k, v]) => `${k}=${q1(v)}`).join(" ")} PATH=${q1(path.join(HOME, "bin"))}:"$PATH"; `;
@@ -1305,6 +1311,29 @@ async function procRows() {
   procs = r.code === 0 ? psRows(r.stdout) : [];
   return procs;
 }
+// agent-browser: each run gets its own session and namespace, so one agent's
+// `close --all` stays inside its run, and an idle daemon ends by itself. The
+// daemon starts outside the agent's process tree (setsid); the pid files under
+// <root>/namespaces/<run>/run/ name it.
+export const AB_ROOT = path.join(os.homedir(), ".agent-browser");
+export const browserEnv = (taskId, runId) => ({ AGENT_BROWSER_SESSION: `${taskId}-${runId}`, AGENT_BROWSER_NAMESPACE: runId, AGENT_BROWSER_IDLE_TIMEOUT_MS: "600000" });
+export function abDaemons(runId, root = AB_ROOT) {
+  const dir = path.join(root, "namespaces", String(runId).toLowerCase(), "run");
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith(".pid")); } catch { return []; }
+  return names.map((n) => Number(fs.readFileSync(path.join(dir, n), "utf8").trim())).filter((pid) => pid > 1);
+}
+// What to stop for a run's daemons: each pid only while it still is an
+// agent-browser process (a pid file can outlive its daemon), and the Chrome below it.
+export function abTargets(pids, rows) {
+  const out = [];
+  for (const pid of pids) {
+    const row = rows.find((x) => x.pid === pid);
+    if (!row || !/agent-browser/.test(row.command.split(" ")[0])) continue;
+    out.push(pid, ...chromesBelow(pid, rows));
+  }
+  return out;
+}
 // A run that wrote its result does not need its browser any more: close the
 // Chrome in that agent's own process tree (never one of the person's or of
 // another agent). The agent's tools start a new one if it needs it again.
@@ -1314,8 +1343,17 @@ async function closeBrowsers() {
   if (Date.now() - lastClose < 10000) return; // ps at most every 10 s
   lastClose = Date.now();
   const done = tasks.flatMap((t) => (t.runs ?? []).filter((r) => r.result && isLive(r)));
-  if (!done.length) return;
+  // agent-browser outlives its agent: a run with a result, or one that ended.
+  const ab = tasks.flatMap((t) => (t.runs ?? []).filter((r) => r.result || r.ended)).map((r) => [r, abDaemons(r.id)]).filter(([, pids]) => pids.length);
+  if (!done.length && !ab.length) return;
   const rows = await procRows();
+  for (const [r, pids] of ab) {
+    for (const pid of abTargets(pids, rows)) {
+      if (closedChromes.has(pid)) continue;
+      closedChromes.add(pid);
+      try { process.kill(pid, "SIGTERM"); log("closed agent-browser", pid, "of run", r.id, "(run finished)"); } catch {}
+    }
+  }
   for (const r of done) {
     for (const pid of chromesBelow(term(r.terminal)?.pid, rows)) {
       if (closedChromes.has(pid)) continue;

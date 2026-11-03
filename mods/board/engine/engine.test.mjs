@@ -301,3 +301,30 @@ test("codex members run with a writable sandbox unless their own args say otherw
   assert.deepEqual(codexDefaults({ program: "codex", args: ["--full-auto"] }), []);
   assert.deepEqual(codexDefaults({ program: "claude" }), []);
 });
+
+import { browserEnv, abDaemons, abTargets } from "./engine.mjs";
+test("agent-browser: each run gets its own session and namespace", () => {
+  assert.deepEqual(browserEnv("t1", "rabc"), { AGENT_BROWSER_SESSION: "t1-rabc", AGENT_BROWSER_NAMESPACE: "rabc", AGENT_BROWSER_IDLE_TIMEOUT_MS: "600000" });
+});
+test("agent-browser: a run's daemons come from its namespace's pid files only", () => {
+  const root = fsx.mkdtempSync(pathx.join(osx.tmpdir(), "ab-"));
+  for (const [ns, name, pid] of [["rone", "t1-rOne", "101"], ["rone", "t1-rOne-b", "102\n"], ["rtwo", "t2-rtwo", "201"]]) {
+    fsx.mkdirSync(pathx.join(root, "namespaces", ns, "run"), { recursive: true });
+    fsx.writeFileSync(pathx.join(root, "namespaces", ns, "run", `${name}.pid`), pid);
+  }
+  fsx.writeFileSync(pathx.join(root, "namespaces", "rone", "run", "t1-rOne.sock"), "");
+  assert.deepEqual(abDaemons("rOne", root).sort(), [101, 102]);
+  assert.deepEqual(abDaemons("rthree", root), []);
+  fsx.rmSync(root, { recursive: true });
+});
+test("agent-browser: stop a daemon and its Chrome, never a reused pid or someone else's Chrome", () => {
+  const AB = "/opt/homebrew/lib/node_modules/agent-browser/bin/agent-browser-darwin-arm64";
+  const CFT = "/Users/u/.agent-browser/browsers/chrome-156/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+  const rows = psRows([
+    `101 1 ${AB}`, `111 101 ${CFT} --remote-debugging-port=0 --user-data-dir=/tmp/agent-browser-chrome-x`, `112 111 ${CFT.replace("MacOS/Google Chrome for Testing", "Helpers/x")} --type=renderer`,
+    `201 1 ${AB}`, `211 201 ${CFT} --remote-debugging-port=0`,
+    `102 1 /bin/zsh`,  // pid file left over, pid now someone else's
+    `300 1 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/Users/u/.herdr/board/chrome-github`,
+  ].join("\n"));
+  assert.deepEqual(abTargets([101, 102, 999], rows), [101, 111]);
+});

@@ -187,3 +187,26 @@ hour of load per core, memory pressure and swap (with the gate's limits and the
 times it was closed), the gate and the browser slots right now, and the machine
 settings above plus the run limit. The engine writes those numbers to
 `machine.json` here about every 10 seconds, apart from `state.json`.
+
+## Browsers for agents (agent-browser)
+
+Members can drive Chrome with `agent-browser` from the shell instead of the
+chrome-devtools MCP tools: say so in their brief. The engine gives every run
+its own browser:
+
+- `AGENT_BROWSER_SESSION` is `<task>-<run>`, and `AGENT_BROWSER_NAMESPACE` is
+  the run id. A `close --all` in one run cannot reach another run's browsers.
+- `AGENT_BROWSER_IDLE_TIMEOUT_MS` is 600000. A daemon (the agent-browser
+  background process) with no command for 10 minutes ends by itself.
+- When a run writes its result or ends, the engine stops that run's daemons
+  and their Chrome. It finds them through the pid files in
+  `~/.agent-browser/namespaces/<run>/run/`. It never stops other runs'
+  browsers, the person's Chrome or the board's Chrome profiles. The log line
+  is "closed agent-browser <pid> of run <run>".
+
+Inside Codex's `workspace-write` sandbox, `agent-browser` from the shell does
+not work: Chrome cannot start there. Codex members can use `agent-browser mcp`
+as an MCP server, because MCP servers run outside the sandbox. Codex does not
+pass the agent's environment to MCP servers, so the server's configuration
+must forward the session: `env_vars = ["AGENT_BROWSER_SESSION",
+"AGENT_BROWSER_NAMESPACE", "AGENT_BROWSER_IDLE_TIMEOUT_MS"]`.

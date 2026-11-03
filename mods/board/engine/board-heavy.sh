@@ -59,7 +59,8 @@ if ! take; then
   until take; do sleep "$poll"; done
   rm -f "$wait_file"
 fi
-if [ "$nice_n" -gt 0 ] 2>/dev/null; then nice -n "$nice_n" "$@" <&0 & else "$@" <&0 & fi
+# A sandbox (Codex) may refuse a lower priority: then run it as it is, quietly.
+if [ "$nice_n" -gt 0 ] 2>/dev/null && [ -z "$(nice -n "$nice_n" true 2>&1)" ]; then nice -n "$nice_n" "$@" <&0 & else "$@" <&0 & fi
 child=$!
 wait "$child"
 rc=$?
