@@ -1,5 +1,5 @@
 // The board screen's data: a client of the board engines. Each machine runs an
-// engine (engine/engine.mjs, a launchd service) that keeps that machine's
+// engine (engine/engine.mjs, a launchd/systemd service) that keeps that machine's
 // boards, team library and tasks, starts the agents and hands tasks on. This
 // mod reads each engine's state.json and sends every change to its inbox/ as a
 // request. It also installs and updates the engines (see engine.js here).
@@ -10,6 +10,7 @@
 
 import { shared, setShared, spaces as spacesNow, panes as panesNow, machines, exec, appHome, readTextFile, knownAgents, notify, run, focused, window, playSound } from "herdr";
 import * as fs from "fs/promises";
+import { osOf, serviceHint, UNIT, systemdUnit, LINUX_SERVICE, PICK_LINUX } from "./platform.js"; // Linux (LINUX.md)
 
 export const MOD = "board";
 export const PROTOCOL = 2;
@@ -228,7 +229,7 @@ async function send(machine, name, body, wait) {
       return ans;
     }
   }
-  throw new Error(`The board engine on ${machine ?? "this Mac"} did not answer. Is it running? (launchctl print gui/$UID/${LABEL})`);
+  throw new Error(`The board engine on ${machine ?? "this Mac"} did not answer. Is it running? (${serviceHint(machine, LABEL)})`);
 }
 
 // ---- task changes ----
@@ -527,7 +528,8 @@ export async function detach(taskId, name) {
 }
 
 export async function pickFiles() {
-  if (window().platform !== "macos") return null;
+  const linux = window().platform === "linux"; // Linux: zenity instead of osascript (platform.js)
+  if (window().platform !== "macos" && !linux) return null;
   const out = `${appHome()}/board/.pick-${uid("p")}`;
   const script = [
     'tell application "System Events" to activate',
@@ -538,13 +540,13 @@ export async function pickFiles() {
     "end repeat",
     "return out",
   ].flatMap((l) => ["-e", l]);
-  await exec("sh", ["-c", 'o="$1"; shift; (osascript "$@" >"$o" 2>"$o.err"; echo $? >"$o.done") </dev/null >/dev/null 2>&1 &', "sh", out, ...script]);
+  await exec("sh", linux ? ["-c", PICK_LINUX, "sh", out] : ["-c", 'o="$1"; shift; (osascript "$@" >"$o" 2>"$o.err"; echo $? >"$o.done") </dev/null >/dev/null 2>&1 &', "sh", out, ...script]);
   try {
     for (let i = 0; i < 3000 && !(await fs.exists(`${out}.done`)); i++) await exec("sleep", ["0.3"]);
     const code = parseInt((await readTextFile(`${out}.done`)) ?? "1", 10);
     const err = (await readTextFile(`${out}.err`)) ?? "";
     if (code !== 0) {
-      if (/cancel/i.test(err) || !err.trim()) return [];
+      if ((linux && code === 1) || /cancel/i.test(err) || !err.trim()) return [];
       throw new Error(err.trim());
     }
     return ((await readTextFile(out)) ?? "").split("\n").filter(Boolean);
@@ -645,13 +647,24 @@ async function engineSource() {
     const readme = await fs.readFile(`${appHome()}/mods/${MOD}/engine/README.md`, "utf8").catch(() => "");
     const heavy = await fs.readFile(`${appHome()}/mods/${MOD}/engine/board-heavy.sh`, "utf8").catch(() => "");
     const skill = await fs.readFile(`${appHome()}/mods/${MOD}/engine/SKILL.md`, "utf8").catch(() => "");
-    bundled = { text, readme, heavy, skill, version: `${PROTOCOL}-${hash(text + readme + heavy + skill)}` };
+    // engine.mjs imports platform.mjs (its Linux layer), so it goes along everywhere.
+    const platform = await fs.readFile(`${appHome()}/mods/${MOD}/engine/platform.mjs`, "utf8");
+    bundled = { text, readme, heavy, skill, platform, version: `${PROTOCOL}-${hash(text + readme + heavy + skill + platform)}` };
   }
   return bundled;
 }
+// A text in pieces of at most 30000 code points (under 128 KiB of UTF-8 each),
+// for arguments: Linux refuses a longer one with "Argument list too long".
+export function argPieces(text) {
+  const cps = Array.from(String(text));
+  const out = [];
+  for (let i = 0; i < cps.length; i += 30000) out.push(cps.slice(i, i + 30000).join(""));
+  return out.length ? out : [""];
+}
+
 const installing = {};
 // Puts the bundled engine on a machine when its version differs, and (re)starts
-// its launchd service. Returns what it did.
+// its service (launchd; a systemd user unit on Linux). Returns what it did.
 export async function ensureEngine(machine) {
   const k = keyOf(machine);
   if (installing[k]) return "busy";
@@ -674,10 +687,12 @@ export async function ensureEngine(machine) {
     const [node, hcPath, uidNum, userHome] = paths;
     if (!node || !node.startsWith("/")) throw new Error(`Node is not installed on ${machine ?? "this Mac"}: the board engine needs it.`);
     if (!hcPath?.startsWith("/")) throw new Error(`hc is not on the PATH on ${machine ?? "this Mac"}.`);
-    const plistPath = `${userHome}/Library/LaunchAgents/${LABEL}.plist`;
+    // Linux: a systemd user unit in place of the launchd plist (platform.js).
+    const linux = (await osOf(machine)) === "linux";
+    const plistPath = linux ? `${userHome}/.config/systemd/user/${UNIT}` : `${userHome}/Library/LaunchAgents/${LABEL}.plist`;
     const pathEnv = [...new Set([node, hcPath].map((p) => p.slice(0, p.lastIndexOf("/"))).concat(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]))].join(":");
     const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
-    const plist = `<?xml version="1.0" encoding="UTF-8"?>
+    const plist = linux ? systemdUnit({ node, home, hcPath, machine: machine ?? "this machine", pathEnv }) : `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>${LABEL}</string>
@@ -687,9 +702,14 @@ export async function ensureEngine(machine) {
 <key>StandardErrorPath</key><string>${esc(home)}/engine.err</string><key>StandardOutPath</key><string>/dev/null</string>
 </dict></plist>
 `;
+    // Linux takes at most 128 KiB in one argument (MAX_ARG_STRLEN), and engine.mjs
+    // is near that: it goes as pieces, the first as $2 and the rest after ${11}.
+    const [first, ...more] = argPieces(src.text);
     // The engine's files, then its service: a running one is replaced (bootout, bootstrap).
     const w = await exec("sh", ["-c", `set -e; mkdir -p "$1/engine" "$1/bin" "$(dirname "$4")"
-printf "%s" "$2" > "$1/engine/.engine.mjs.tmp" && mv -f "$1/engine/.engine.mjs.tmp" "$1/engine/engine.mjs"
+pieces() { shift 11; printf "%s" "$@"; }
+printf "%s" "\${11}" > "$1/engine/.platform.mjs.tmp" && mv -f "$1/engine/.platform.mjs.tmp" "$1/engine/platform.mjs"
+{ printf "%s" "$2"; pieces "$@"; } > "$1/engine/.engine.mjs.tmp" && mv -f "$1/engine/.engine.mjs.tmp" "$1/engine/engine.mjs"
 printf "%s" "$9" > "$1/bin/.board-heavy.tmp" && chmod 755 "$1/bin/.board-heavy.tmp" && mv -f "$1/bin/.board-heavy.tmp" "$1/bin/board-heavy"
 printf "%s" "$5" > "$4.tmp" && mv -f "$4.tmp" "$4"
 printf "%s" "$8" > "$1/.README.md.tmp" && mv -f "$1/.README.md.tmp" "$1/README.md"
@@ -704,11 +724,13 @@ if [ -n "\${10}" ]; then
   if [ -d "$C" ] && [ ! -L "$C" ] && [ "$(ls -A "$C")" = "SKILL.md" ]; then rm -rf "$C"; fi
   [ -e "$C" ] && [ ! -L "$C" ] || ln -sfn "$S" "$C"
 fi
+${linux ? LINUX_SERVICE : ""}
 launchctl bootout "gui/$6/$7" 2>/dev/null || true
 for i in 1 2 3 4 5 6 7 8 9 10; do launchctl bootstrap "gui/$6" "$4" 2>/dev/null && exit 0; sleep 0.5; done
-launchctl bootstrap "gui/$6" "$4"`, "sh", home, src.text, src.version, plistPath, plist, uidNum, LABEL, src.readme, src.heavy,
+launchctl bootstrap "gui/$6" "$4"`, "sh", home, first, src.version, plistPath, plist, uidNum, LABEL, src.readme, src.heavy,
       // The skill names this machine's board home (here: ~/.config/herdr-app/board).
-      src.skill.replaceAll("~/.herdr/board", home.startsWith(`${userHome}/`) ? `~${home.slice(userHome.length)}` : home)], { on: machine });
+      src.skill.replaceAll("~/.herdr/board", home.startsWith(`${userHome}/`) ? `~${home.slice(userHome.length)}` : home),
+      src.platform, ...more], { on: machine });
     if (w.code !== 0) throw new Error(`Could not install the board engine on ${machine ?? "this Mac"}: ${(w.stderr || w.stdout).trim()}`);
     return have ? "updated" : "installed";
   } finally {
