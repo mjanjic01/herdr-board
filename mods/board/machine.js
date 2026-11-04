@@ -205,7 +205,7 @@ export class MachineView extends View {
           .child(div().pt(3).text_size(10.5).text_color(tm.dim).child("No new starts at this memory pressure or worse.")))
         .child(f("swap", "Swap gate (%)", "No new starts above this share of swap used; 0 = off. macOS keeps swap, so keep it off or high.")))
       .child(h_flex().gap(16).items_start()
-        .child(f("cleanup", "Clean up after Done (min)", "Idle agent sessions of a task close once it has sat in Done this long; 0 = never."))
+        .child(f("cleanup", "Clean up after Review (min)", "Idle agent sessions of a task close once it has sat in Review or Done this long; 0 = never. A member's earlier session closes as soon as that member finishes a later run of the task."))
         .child(div().flex_1()).child(div().flex_1()));
   }
 

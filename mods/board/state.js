@@ -323,7 +323,7 @@ export async function secretSet(machine, account, value) {
 export async function unblockInTab(t) {
   const machine = t.machine ?? null;
   const space = spacesNow().find((s) => s.id === t.space) ?? null;
-  if (!space) throw new Error("Open the task's space first: the session starts there.");
+  if (!space && !t.worktree?.path) throw new Error("Open the task's space first: the session starts there.");
   const dir = taskDir(t);
   if (!dir) throw new Error("The task has no folder yet.");
   const home = homeNow(machine) ?? (await homeOn(machine));
@@ -388,7 +388,24 @@ export async function unblockInTab(t) {
   const argv = machine
     ? ["sh", "-c", 's=${SHELL:-/bin/zsh}; "$s" -lic \'"$@"\' "$s" "$@"; exec "$s" -li', "sh", ...claude]
     : claude;
-  run("tab.new", { name: `Unblock: ${t.title}`.slice(0, 40), space: space.id, argv });
+  const name = `Unblock: ${t.title}`.slice(0, 40);
+  // A task with its own worktree: the session goes to that worktree's space
+  // (made now if none is open), so the board's space keeps only the board.
+  if (t.worktree?.path) {
+    const own = taskSpaceOf(t);
+    if (own) { run("space.select", { id: own.id }); run("tab.new", { name, space: own.id, folder: t.worktree.path, argv }); }
+    else run("space.new", { machine: machine ?? "", folder: t.worktree.path, tab: name, argv });
+    return;
+  }
+  run("tab.new", { name, space: space.id, argv });
+}
+
+// The open space of a task's own worktree (the engine maps it), else null.
+export function taskSpaceOf(t) {
+  const machine = t?.machine ?? null;
+  const map = stateOf(machine)?.spaces ?? {};
+  const id = Object.keys(map).find((k) => map[k].taskWorktree && map[k].task === t.id);
+  return id ? spacesNow().find((s) => s.id === qual(machine, id)) ?? null : null;
 }
 
 // ---- dependencies (the engine enforces them; the screen shows them) ----
@@ -448,8 +465,10 @@ export function place(s) {
   return panes().find((p) => tabs.has(p.tab) && p.cwd)?.cwd || s.folder || null;
 }
 
-// Goes to the run's terminal: its pane, else a tab for it now.
-export function goTo(r, name) {
+// Goes to the run's terminal: its pane, else a tab for it now. A run of a task
+// with its own worktree gets its tab in that worktree's space (a new one if
+// none is open): Herdr shows a terminal where its space and tab labels say.
+export function goTo(r, name, t = null) {
   if (!r) return;
   const pane = paneOf(r);
   if (pane) {
@@ -457,6 +476,25 @@ export function goTo(r, name) {
     if (s) run("space.select", { id: s.id });
     run("tab.select", { id: pane.tab });
     run("pane.focus", { terminal: r.terminal });
+    return;
+  }
+  if (isLive(r) && t?.worktree?.path) {
+    const machine = t.machine ?? null;
+    const own = taskSpaceOf(t);
+    const sp = own ? local(own.id) : uid("sp");
+    const tb = uid("tb");
+    (async () => {
+      // hc here takes "<machine>/t7" (a remote shell's PATH may lack hc); label ids are that machine's.
+      const x = await exec("hc", ["label", r.terminal, `herdr.space=${sp}`, `herdr.tab=${tb}`]);
+      if (x.code !== 0) throw new Error((x.stderr || x.stdout || "hc label failed").trim());
+      // Herdr shows the labeled terminal on its next look: wait for its tab.
+      const shown = () => spacesNow().some((s) => s.id === qual(machine, sp) && s.tabs.some((c) => c.id === qual(machine, tb)));
+      for (let i = 0; i < 40 && !shown(); i++) await exec("sleep", ["0.25"]);
+      if (!shown()) throw new Error("Herdr did not show the run's terminal yet. It appears in the sidebar when it does.");
+      run("space.select", { id: qual(machine, sp) });
+      run("tab.select", { id: qual(machine, tb) });
+      if (name) run("tab.rename", { id: qual(machine, tb), name });
+    })().catch((e) => notify({ title: "Could not open the run in its worktree's space", body: String(e?.message ?? e).slice(0, 200), level: "error", timeout: 8000 }));
     return;
   }
   if (isLive(r)) {

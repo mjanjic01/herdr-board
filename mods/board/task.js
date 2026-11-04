@@ -324,7 +324,7 @@ export class TaskView extends View {
       .when(Boolean(status), (el) => el.child(statusGlyph(status, 10)))
       .when(reach, (el) => el
         .child(tiny(`peek-${r.id}`, "Peek", () => run("terminal.peek", { terminal: r.terminal })))
-        .child(tiny(`go-${r.id}`, pane ? "Go to" : "Open as tab", () => { this.close(); goTo(r, `${t.title} · ${m?.name ?? "run"}`); })))
+        .child(tiny(`go-${r.id}`, pane ? "Go to" : "Open as tab", () => { this.close(); goTo(r, `${t.title} · ${m?.name ?? "run"}`, t); })))
       .when(reach && !r.ended, (el) => el
         .child(tiny(`stop-${r.id}`, "Stop", (_e, cx) => this.run(cx, () => endRun(t.id, r.id, "stopped")), { danger: true })))
       .when(!reach && !r.background && Boolean(r.tab) && Boolean(r.ended), (el) => el.child(tiny(`go-${r.id}`, "Open tab", () => { this.close(); goTo(r); })));

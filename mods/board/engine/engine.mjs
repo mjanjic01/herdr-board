@@ -352,18 +352,25 @@ const core = new Core();
 // The live world, read once per pass: this machine's terminals, its Herdr
 // spaces, and the board each space shows.
 let world = { terminals: [], spaces: [], spaceBoards: {}, ok: false };
+// The board each space showed: { <space id>: <board id> }. A space keeps it
+// while it is open, wherever its first terminal goes later (an agent in the
+// space that moves into a task's worktree must not take the board away).
+let pins = {};
 async function look() {
   try {
     const list = await core.call("terminal.list", {});
     const terminals = (list.terminals ?? []).filter((k) => !k.address.includes("/"))
       .map((k) => ({ address: k.address, state: k.state, status: statusOf(k.status), msg: msgOf(k.status), kind: kindOf(k.status), statusAt: k.status_ms ?? null, cwd: k.foreground?.cwd ?? k.cwd ?? null, pid: k.foreground?.pid ?? null, labels: k.labels ?? {} }));
     let spaces = world.spaces;
+    let fresh = false;
     try {
       const doc = await core.call("doc.get", { name: "herdr-app" });
       spaces = (doc?.value?.spaces ?? []).map((s) => ({ id: s.id, name: s.name || "", folder: s.folder ?? null, tabs: (s.tabs ?? []).map((t) => ({ id: t.id, terminals: termsOf(t.root) })) }));
+      fresh = true;
     } catch {}
     world = { ...world, terminals, spaces, ok: true };
     world.spaceBoards = await mapSpaces();
+    pinSpaces(fresh);
   } catch (e) {
     world = { ...world, ok: false };
     log("core:", e.message);
@@ -460,9 +467,19 @@ async function mapSpaces() {
     if (!f) continue;
     const co = await checkoutOf(f);
     const tw = taskOfWorktree(co);
-    out[s.id] = tw ? { folder: co.top, taskWorktree: true, task: tw.id, board: tw.board ?? null } : { folder: co.top, board: boardIdOf(co.top) };
+    const pin = boardById(pins[s.id]);
+    out[s.id] = pin ? { folder: pin.folder, board: pin.id }
+      : tw ? { folder: co.top, taskWorktree: true, task: tw.id, board: tw.board ?? null } : { folder: co.top, board: boardIdOf(co.top) };
   }
   return out;
+}
+// A space that shows a board that exists keeps it. Pins of closed spaces go,
+// only when the space list was read just now (not a stale one after a failed read).
+function pinSpaces(fresh) {
+  for (const [id, v] of Object.entries(world.spaceBoards)) if (!v.taskWorktree && !pins[id] && boardById(v.board)) pins[id] = v.board;
+  if (!fresh) return;
+  const open = new Set(world.spaces.map((s) => s.id));
+  for (const id of Object.keys(pins)) if (!open.has(id)) delete pins[id];
 }
 const boardOfSpace = (sid) => (world.spaceBoards[sid]?.taskWorktree ? null : world.spaceBoards[sid]?.board ?? null);
 // A board shows where an open space shows it.
@@ -555,6 +572,8 @@ function load() {
   limitGate = st.limitGate ?? null;
   // A closed load gate stays closed across a restart, until two calm checks.
   loadGate = st.loadGate ? { ...st.loadGate, calm: 0 } : null;
+  // An engine from before pins: the spaces that showed a board then keep it.
+  pins = st.pins ?? Object.fromEntries(Object.entries(st.spaces ?? {}).filter(([, v]) => !v.taskWorktree && boardById(v.board)).map(([id, v]) => [id, v.board]));
   for (const t of tasks) if (!t.board && t.folder) { t.board = ensureBoard(t.folder).id; dirty = true; }
 }
 
@@ -590,6 +609,10 @@ function updateTask(id, patch) {
     if (t.id !== id) return t;
     const next = typeof patch === "function" ? patch(t) : { ...t, ...patch, updated: Date.now() };
     // When the task entered Done: the session cleanup counts from there.
+    // Review and Done: when the task entered them (the session cleanup counts from there).
+    const rest = (c) => c === "review" || c === "done";
+    if (rest(next.column) && !rest(t.column)) next.restAt = Date.now();
+    if (!rest(next.column) && next.restAt) next.restAt = null;
     if (next.column === "done" && t.column !== "done") return { ...next, doneAt: Date.now() };
     if (next.column !== "done" && next.doneAt) return { ...next, doneAt: null };
     return next;
@@ -1442,21 +1465,24 @@ function strandedHandoffs() {
   }
 }
 
-// Sessions of finished runs that sit idle: closed after IDLE_CLOSE_MS once the
-// task left In progress or another run took over. Never a run in a pane the
-// person kept, never one that works or waits for the person.
+// Sessions of finished runs that sit idle: closed after IDLE_CLOSE_MS. Never a
+// run in a pane the person kept, never one that works or waits for the person.
 const IDLE_CLOSE_MS = 15 * 60000;
-// A finished run's idle session closes only when its task has sat in Done for
-// `doneMinutes` (machine setting cleanupDone, default 30; 0 = never): in Review
-// or while the task moves on, the person may still ask an agent something.
+// A finished run's idle session closes when the same member finished a later
+// run of the task (only each member's last session stays to ask), or when the
+// task has sat in Review or Done for `doneMinutes` (machine setting
+// cleanupDone, default 30; 0 = never).
 export function closable(t, r, k, now = Date.now(), doneMinutes = 30) {
   if (!r?.result || r.closed || !k || k.state !== "live") return false;
   if (k.labels?.["herdr.tab"]) return false;
   if (k.status !== "idle" && k.status !== "done") return false;
-  if (!(doneMinutes > 0) || t.column !== "done") return false;
-  const since = t.doneAt ?? t.updated ?? now;
-  if (now - since < doneMinutes * 60000) return false;
-  return r.idleAt != null && now - r.idleAt > IDLE_CLOSE_MS;
+  if (!(r.idleAt != null && now - r.idleAt > IDLE_CLOSE_MS)) return false;
+  const runs = t.runs ?? [];
+  const later = runs.slice(runs.findIndex((x) => x.id === r.id) + 1).some((x) => x.member === r.member && x.result);
+  if (later) return true;
+  if (!(doneMinutes > 0) || (t.column !== "review" && t.column !== "done")) return false;
+  const since = (t.column === "done" ? t.doneAt : null) ?? t.restAt ?? t.updated ?? now;
+  return now - since >= doneMinutes * 60000;
 }
 function closeIdle() {
   if (!world.ok) return;
@@ -1474,6 +1500,54 @@ function closeIdle() {
       updateTask(t.id, (cur) => ({ ...cur, runs: cur.runs.map((x) => (x.id === r.id ? { ...x, closed: now } : x)), history: hist(cur, `Closed ${name}'s idle session (finished ${Math.round((now - (r.ended ?? now)) / 60000)} min earlier)`, r.member) }));
       log("closed idle", r.terminal, "of", t.id);
     }
+  }
+}
+
+// ---- pull requests ----
+
+// The task's pull requests, for its card: t.prs = [{ number, url, state, draft }].
+// The PRs of its worktree's branch, else the PR links in its description and
+// its agents' summaries. Asked of gh in the background, every few minutes.
+const PR_URL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/g;
+export function prLinksOf(t) {
+  const text = [t.description ?? "", ...(t.runs ?? []).map((r) => r.result?.summary ?? "")].join("\n");
+  const seen = new Map();
+  for (const m of text.matchAll(PR_URL)) if (!seen.has(m[1])) seen.set(m[1], m[0]);
+  return [...seen].map(([n, url]) => ({ number: Number(n), url }));
+}
+const prChecked = new Map();
+let prBusy = false;
+async function pullRequests() {
+  if (prBusy) return;
+  prBusy = true;
+  try {
+    const now = Date.now();
+    for (const t of tasks) {
+      const every = t.column === "done" ? 30 * 60000 : 3 * 60000;
+      if (now - (prChecked.get(t.id) ?? 0) < every) continue;
+      prChecked.set(t.id, now);
+      const cwd = [t.worktree?.path, t.worktree?.repo, boardOf(t)?.folder, t.folder].find((f) => f && fs.existsSync(f));
+      if (!cwd) continue;
+      const fields = "number,url,state,isDraft";
+      let prs = null;
+      if (t.worktree?.branch) {
+        const r = await run("gh", ["pr", "list", "--head", t.worktree.branch, "--state", "all", "--json", fields], { cwd, timeout: 20000 });
+        if (r.code !== 0) continue;
+        try { prs = JSON.parse(r.stdout); } catch { continue; }
+      }
+      if (!prs?.length) {
+        prs = [];
+        for (const l of prLinksOf(task(t.id) ?? t).slice(0, 4)) {
+          const r = await run("gh", ["pr", "view", l.url, "--json", fields], { cwd, timeout: 20000 });
+          try { prs.push(r.code === 0 ? JSON.parse(r.stdout) : { ...l, state: null }); } catch { prs.push({ ...l, state: null }); }
+        }
+      }
+      const next = prs.map((p) => ({ number: p.number, url: p.url, state: p.state ?? null, draft: Boolean(p.isDraft) })).sort((a, b) => a.number - b.number);
+      const cur = task(t.id);
+      if (cur && JSON.stringify(cur.prs ?? []) !== JSON.stringify(next)) updateTask(t.id, (x) => ({ ...x, prs: next }));
+    }
+  } finally {
+    prBusy = false;
   }
 }
 
@@ -1940,7 +2014,7 @@ function live() {
 }
 function save() {
   const liveNow = live();
-  const liveText = JSON.stringify([liveNow, world.spaceBoards]);
+  const liveText = JSON.stringify([liveNow, world.spaceBoards, pins]);
   if (!dirty && liveText === lastLive) return;
   if (dirty) {
     writeAtomic(P("tasks.json"), JSON.stringify(tasks));
@@ -1949,7 +2023,7 @@ function save() {
     writeAtomic(P("settings.json"), JSON.stringify(settings, null, 2));
   }
   const seq = Date.now();
-  writeAtomic(P("state.json"), JSON.stringify({ protocol: PROTOCOL, version: VERSION, machine: MACHINE, home: HOME, secretClient: { node: process.execPath, engine: ENGINE_FILE }, limitGate, loadGate, boardDefaults: DEFAULT_BOARD, seq, tasks, boards, teams, settings, spaces: world.spaceBoards, live: liveNow, events, applied }));
+  writeAtomic(P("state.json"), JSON.stringify({ protocol: PROTOCOL, version: VERSION, machine: MACHINE, home: HOME, secretClient: { node: process.execPath, engine: ENGINE_FILE }, limitGate, loadGate, boardDefaults: DEFAULT_BOARD, seq, tasks, boards, teams, settings, spaces: world.spaceBoards, pins, live: liveNow, events, applied }));
   writeAtomic(P("seq"), String(seq));
   dirty = false;
   lastLive = liveText;
@@ -2059,6 +2133,7 @@ async function pass() {
       strandedHandoffs();
       depsWatch();
       await pickUp();
+      pullRequests().then(() => { if (dirty) save(); }).catch((e) => log("prs:", e?.message ?? String(e)));
       closeIdle();
       save();
     } while (again);
@@ -2068,7 +2143,39 @@ async function pass() {
   busy = false;
 }
 
+// What the space pins change, against the live world, without writing anything:
+// per space, its board without pins and with them. --move <space>=<folder>
+// pretends that space's first terminal is in that folder now.
+async function drySpaces() {
+  await look();
+  if (typeof args.move === "string") {
+    const [sid, folder] = args.move.split("=");
+    const s = spaceById(sid);
+    if (!s) throw new Error(`No space ${sid}`);
+    world.spaces = world.spaces.map((x) => (x === s ? { ...x, tabs: [{ id: "moved", terminals: ["moved"] }, ...x.tabs] } : x));
+    world.terminals = [...world.terminals, { address: "moved", state: "live", cwd: folder, labels: {} }];
+    world.spaceBoards = await mapSpaces();
+  }
+  const kept = pins;
+  pins = {};
+  const before = await mapSpaces();
+  pins = kept;
+  const shownBy = (m) => [...new Set(Object.values(m).filter((v) => !v.taskWorktree).map((v) => v.board))].sort();
+  return {
+    spaces: world.spaces.map((s) => ({ space: s.id, name: s.name, before: before[s.id] ?? null, after: world.spaceBoards[s.id] ?? null, pin: pins[s.id] ?? null })),
+    shownBefore: shownBy(before), shownAfter: shownBy(world.spaceBoards),
+    tasksWhoseBoardShowChanges: tasks.filter((t) => shownBy(before).includes(t.board) !== shownBy(world.spaceBoards).includes(t.board)).map((t) => `${t.id} ${t.column} ${t.title}`),
+  };
+}
+
 async function main() {
+  if (args["dry-spaces"]) {
+    load();
+    try { console.log(JSON.stringify(await drySpaces(), null, 2)); }
+    catch (e) { console.error(e.message); process.exitCode = 1; }
+    core.p?.kill?.();
+    process.exit();
+  }
   if (DRY) {
     load();
     try { console.log(JSON.stringify(await dryRun(String(args["dry-run"])), null, 2)); }

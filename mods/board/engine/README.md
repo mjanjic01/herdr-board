@@ -49,6 +49,9 @@ Read `board.json`. It holds:
 
 - `boards`: one entry per board. Each has `folder`, `team`, `pick_up`,
   `worktrees`, and `open`. `open` is true when a Herdr space shows the board.
+  A space shows the board of the folder that its first terminal is in when
+  the space first shows a board. It keeps that board while it is open, also
+  if that terminal moves into a task's worktree later.
   `members` lists the team: name, role, program, model, `tasks_at_once` and
   `hands_off_to`.
 - `teams`: the team library, with the member names of each team.

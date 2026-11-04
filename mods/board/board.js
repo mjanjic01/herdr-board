@@ -2,7 +2,7 @@
 // showing who is on it and what their agent is doing right now.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Popover } from "gpui-base";
-import { theme, props, openOverlay, closeOverlay, run, focused, notify } from "herdr";
+import { theme, props, openOverlay, closeOverlay, run, focused, notify, exec } from "herdr";
 import { depsOpen, depsLine, DEP_DONE, unblockInTab, COLUMNS, MOD, tasks, tasksOf, team, member, column, activeRun, liveStatus, runLimit, updateTask, launch, boardSettings, setBoardSettings, setBoardTeam, boardOfSpace, teamsOf, stateOf, outdated, lead, poll, ensureEngine, served, request, programTable, uid, programs, knownNow, ago, spaces, busyOn } from "./state.js";
 import { button, tiny, memberChip, programIcon, statusGlyph, STATUS_WORDS, colorOf, dot } from "./ui.js";
 import { noteOf, plain, clip } from "./note.js";
@@ -162,8 +162,26 @@ export class Board extends View {
         .child(div().child("·"))
         .child(div().child(ago(t.updated ?? t.created)))
         .child(div().flex_1())
+        .when((t.prs?.length ?? 0) > 0, (el) => el.child(this.prChips(t, ghost)))
         .when(Boolean(t.attention) && !ghost, (el) => el.child(tiny(`unblock-${t.id}`, "Unblock ↗", (_e, cx) => this.unblock(t, cx))))
         .when(canStart && !ghost, (el) => el.child(tiny(`start-${t.id}`, "▶ Start", (_e, cx) => this.start(t, cx)))));
+  }
+
+  // The task's pull requests: a GitHub mark and their numbers, colored by state.
+  // A click opens the PR in the browser on this Mac.
+  prChips(t, ghost) {
+    const tm = theme();
+    const color = (p) => (p.state === "MERGED" ? tm.ansi5 : p.state === "CLOSED" ? tm.dim : p.draft ? tm.muted : tm.working ?? tm.foreground);
+    const word = (p) => (p.state === "MERGED" ? "merged" : p.state === "CLOSED" ? "closed" : p.draft ? "draft" : p.state === "OPEN" ? "open" : "");
+    return h_flex().items_center().gap(4).flex_none()
+      .child(svg("mods/board/github.svg").size(11).text_color(tm.muted))
+      .children(t.prs.map((p) => div().id(`pr-${t.id}-${p.number}`).text_color(color(p))
+        .when(p.state === "CLOSED", (el) => el.line_through())
+        .when(!ghost, (el) => el.cursor_pointer().hover((s) => s.underline())
+          .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .on_click((_e, cx) => { cx.stop_propagation(); if (p.url) exec("open", [p.url]); }))
+        .tooltip(`#${p.number} ${word(p)}`.trim())
+        .child(`#${p.number}`)));
   }
 
   columnView(col, list) {

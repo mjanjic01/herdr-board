@@ -124,14 +124,15 @@ test("a doing task with an assignee, no run, no note and not waiting is stranded
   assert.equal(stranded({ column: "doing", assignee: "cy", autopilot: false }, null), false);
 });
 
-test("idle sessions close only after the task sat in Done for a while", () => {
+test("idle sessions close after the task sat in Review or Done for a while", () => {
   const now = 10_000_000;
   const r = { id: "r1", result: { action: "done" }, idleAt: now - 16 * 60000 };
   const k = { state: "live", status: "idle", labels: {} };
   const done = { column: "done", doneAt: now - 31 * 60000, runs: [r] };
   assert.equal(closable(done, r, k, now), true);
   assert.equal(closable({ ...done, doneAt: now - 10 * 60000 }, r, k, now), false);
-  assert.equal(closable({ ...done, column: "review" }, r, k, now), false);
+  assert.equal(closable({ column: "review", restAt: now - 31 * 60000, runs: [r] }, r, k, now), true);
+  assert.equal(closable({ column: "review", restAt: now - 10 * 60000, runs: [r] }, r, k, now), false);
   assert.equal(closable({ column: "doing", runs: [r, { id: "r2" }] }, r, k, now), false);
   assert.equal(closable(done, r, k, now, 0), false);
   assert.equal(closable(done, { ...r, idleAt: now - 5 * 60000 }, k, now), false);
@@ -327,4 +328,25 @@ test("agent-browser: stop a daemon and its Chrome, never a reused pid or someone
     `300 1 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/Users/u/.herdr/board/chrome-github`,
   ].join("\n"));
   assert.deepEqual(abTargets([101, 102, 999], rows), [101, 111]);
+});
+
+test("a member's earlier idle session closes once the member finished a later run", () => {
+  const now = 10_000_000;
+  const k = { state: "live", status: "done", labels: {} };
+  const r1 = { id: "r1", member: "bo", result: { action: "handoff" }, idleAt: now - 16 * 60000 };
+  const r2 = { id: "r2", member: "cy", result: { action: "handoff" }, idleAt: now - 16 * 60000 };
+  const r3 = { id: "r3", member: "bo", result: { action: "handoff" }, idleAt: now - 16 * 60000 };
+  const t = { column: "doing", runs: [r1, r2, r3] };
+  assert.equal(closable(t, r1, k, now), true);
+  assert.equal(closable(t, r2, k, now), false);
+  assert.equal(closable(t, r3, k, now), false);
+  assert.equal(closable({ ...t, runs: [r1, r2, { ...r3, result: null }] }, r1, k, now), false);
+  assert.equal(closable(t, { ...r1, idleAt: now - 5 * 60000 }, k, now), false);
+  assert.equal(closable(t, r1, { ...k, status: "working" }, now), false);
+});
+
+import { prLinksOf } from "./engine.mjs";
+test("PR links come from the description and the summaries, once each", () => {
+  const t = { description: "See https://github.com/o/r/pull/12 and https://github.com/o/r/pull/12.", runs: [{ result: { summary: "Opened https://github.com/o/r/pull/30" } }, { result: null }] };
+  assert.deepEqual(prLinksOf(t), [{ number: 12, url: "https://github.com/o/r/pull/12" }, { number: 30, url: "https://github.com/o/r/pull/30" }]);
 });
